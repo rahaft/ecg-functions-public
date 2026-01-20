@@ -91,12 +91,61 @@ if FLASK_AVAILABLE:
                 'type': type(e).__name__
             }), 500
     
+    @app.route('/analyze-fit', methods=['POST'])
+    def analyze_fit():
+        """
+        Analyze grid lines and provide polynomial fit options.
+        
+        Expected JSON:
+        {
+            "horizontal_lines": [[[x1,y1], [x2,y2], ...], ...],
+            "vertical_lines": [[[x1,y1], [x2,y2], ...], ...],
+            "max_order": 6  // optional, default 6
+        }
+        
+        Returns fit menu with R², deviation stats, recommendations.
+        """
+        try:
+            from transformers.fit_analyzer import FitAnalyzer
+            
+            data = request.json
+            h_lines = data.get('horizontal_lines', [])
+            v_lines = data.get('vertical_lines', [])
+            max_order = data.get('max_order', 6)
+            
+            # Convert to numpy arrays
+            h_arrays = [np.array(line) for line in h_lines if len(line) >= 3]
+            v_arrays = [np.array(line) for line in v_lines if len(line) >= 3]
+            
+            if not h_arrays and not v_arrays:
+                return jsonify({
+                    'success': False,
+                    'error': 'No valid lines provided (need at least 3 points per line)'
+                }), 400
+            
+            # Analyze
+            analyzer = FitAnalyzer(max_order=max_order)
+            result = analyzer.analyze_grid(h_arrays, v_arrays)
+            
+            return jsonify({
+                'success': True,
+                **result
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'type': type(e).__name__
+            }), 500
+    
     @app.route('/health', methods=['GET'])
     def health():
         """Health check endpoint."""
         return jsonify({
             'status': 'healthy',
-            'multi_method_available': MULTI_METHOD_AVAILABLE
+            'multi_method_available': MULTI_METHOD_AVAILABLE,
+            'endpoints': ['/transform-multi', '/analyze-fit', '/health']
         })
     
     # Run Flask app if executed directly
