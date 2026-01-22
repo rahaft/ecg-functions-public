@@ -154,8 +154,8 @@
         signInAnonymously(auth).catch(console.error);
         
         // Version info
-        const APP_VERSION = '2.3.8';
-        const BUILD_TIMESTAMP = '2026.01.22.1034';
+        const APP_VERSION = '2.3.9';
+        const BUILD_TIMESTAMP = '2026.01.22.1143';
         const BUILD_DATE = new Date();
         
         // Python service URL (Cloud Run)
@@ -731,10 +731,17 @@
                 
                 const data = await response.json();
                 
+                console.log('Backend response:', data);
+                
                 if (data.success) {
                     // Filter to only successful results
                     const successfulResults = (data.results || []).filter(r => r.success === true);
                     const failedResults = (data.results || []).filter(r => r.success === false);
+                    
+                    console.log(`Results: ${successfulResults.length} succeeded, ${failedResults.length} failed`);
+                    if (failedResults.length > 0) {
+                        console.log('Failed results:', failedResults.slice(0, 3).map(r => ({ path: r.path, error: r.error })));
+                    }
                     
                     // Update progress: Complete
                     updateProgress(progressContainer, imagePaths.length, imagePaths.length, 
@@ -764,29 +771,20 @@
                         };
                     });
                     
-                    // Store processed results
-                    processedImages.set(groupKey, {
-                        images: processedResults,
-                        subImages: {}
-                    });
-                    
-                    // Update UI
-                    updateProcessButton(groupKey, false, true);
-                    updateGroupDropdown(); // Update dropdown status
-                    console.log(`✓ Processed group ${groupKey}`, processedResults);
-                    
-                    // Show success notification with view button
-                    showProcessingCompleteNotification(groupKey, processedResults.length);
-                    
-                    // Remove progress indicator after a delay
-                    setTimeout(() => {
-                        if (progressContainer && progressContainer.parentNode) {
-                            progressContainer.parentNode.removeChild(progressContainer);
-                        }
-                    }, 2000);
-                    
-                    // Show notification based on results
+                    // Only mark as processed if we have successful results
                     if (processedResults.length > 0) {
+                        // Store processed results
+                        processedImages.set(groupKey, {
+                            images: processedResults,
+                            subImages: {}
+                        });
+                        
+                        // Update UI
+                        updateProcessButton(groupKey, false, true);
+                        updateGroupDropdown(); // Update dropdown status
+                        console.log(`✓ Processed group ${groupKey} with ${processedResults.length} successful results`, processedResults);
+                        
+                        // Show success notification with view button
                         showProcessingCompleteNotification(groupKey, processedResults.length, failedResults.length);
                         
                         // Auto-open comparison modal if we have successful results
@@ -794,9 +792,18 @@
                             openComparisonModal(groupKey, processedResults[0].original_name || processedResults[0].name);
                         }, 1000);
                     } else {
-                        // All failed - show error notification
+                        // All failed - don't mark as processed, show error notification
+                        console.warn(`All images failed for group ${groupKey}. Failed results:`, failedResults);
+                        updateProcessButton(groupKey, false, false);
                         showProcessingErrorNotification(groupKey, failedResults);
                     }
+                    
+                    // Remove progress indicator after a delay
+                    setTimeout(() => {
+                        if (progressContainer && progressContainer.parentNode) {
+                            progressContainer.parentNode.removeChild(progressContainer);
+                        }
+                    }, 2000);
                     
                     // Re-render the group header to show processed status
                     const groupHeader = document.querySelector(`.gallery-group-header[data-group-key="${groupKey}"]`);
