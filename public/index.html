@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECG Image Digitization</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, GoogleAuthProvider } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getStorage } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        import { getFirestore } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';
+        
+        // Initialize Firebase (using hv-ecg project config)
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsIWxy1gTV1_e9ZXZnaplcOWqU9PwL_Uc",
+            authDomain: "hv-ecg.firebaseapp.com",
+            projectId: "hv-ecg",
+            storageBucket: "hv-ecg.appspot.com",
+            messagingSenderId: "101881880910",
+            appId: "1:101881880910:web:2320e56f5dcaaa46febe1f"
+        };
+        
+        try {
+            const app = initializeApp(firebaseConfig);
+            window.auth = getAuth(app);
+            window.storage = getStorage(app);
+            window.db = getFirestore(app);
+            window.functions = getFunctions(app);
+            console.log('Firebase initialized successfully');
+        } catch (error) {
+            console.error('Firebase initialization error:', error);
+            alert('Failed to initialize Firebase: ' + error.message);
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ECG Image Digitization</h1>
+            <div style="margin-top: 10px; font-size: 0.9em;">
+                <a href="/gallery.html" style="color: white; text-decoration: underline; margin-right: 15px; font-weight: bold;">📸 Gallery</a>
+                <a href="/training_viewer.html" style="color: white; text-decoration: underline; margin-right: 15px;">Training Viewer</a>
+                <a href="/digitization_test.html" style="color: white; text-decoration: underline;">Test Digitization</a>
+            </div>
+            <div class="auth-section">
+                <div id="auth-status" class="auth-status"></div>
+                <button id="sign-in-btn" class="btn btn-primary" style="display: none;">Sign In</button>
+                <button id="sign-out-btn" class="btn btn-secondary" style="display: none;">Sign Out</button>
+            </div>
+        </header>
+
+        <!-- Sign In Modal -->
+        <div id="sign-in-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Sign In to ECG Image Digitization</h2>
+                    <button class="modal-close" id="close-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Choose your sign-in method:</p>
+                    <div class="sign-in-options">
+                        <button id="google-sign-in-btn" class="btn btn-google">
+                            <svg width="20" height="20" viewBox="0 0 24 24" style="margin-right: 8px;">
+                                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                            </svg>
+                            Sign in with Google
+                        </button>
+                        <button id="anonymous-sign-in-btn" class="btn btn-secondary">
+                            Continue as Guest (Anonymous)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </header>
+
+        <main>
+            <!-- Upload Section -->
+            <section id="upload-section" class="card">
+                <h2>Upload ECG Images</h2>
+                <p class="subtitle">Upload one or multiple images for a single ECG record</p>
+                
+                <div class="upload-area" id="upload-area">
+                    <div class="upload-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="upload-text">Drag and drop ECG images here, or click to select</p>
+                        <p class="upload-hint">Supports PNG, JPEG, TIFF formats</p>
+                        <input type="file" id="file-input" multiple accept="image/*" style="display: none;">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="record-id">ECG Record ID:</label>
+                    <input type="text" id="record-id" placeholder="e.g., ECG_001" required>
+                    <small>Unique identifier for this ECG record</small>
+                </div>
+
+                <div id="file-list" class="file-list"></div>
+
+                <div class="button-group">
+                    <button id="upload-btn" class="btn btn-primary" disabled>Upload Images</button>
+                    <button id="clear-btn" class="btn btn-secondary">Clear</button>
+                </div>
+
+                <div id="upload-progress" class="progress-container" style="display: none;">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="progress-text" class="progress-text">Uploading...</p>
+                </div>
+            </section>
+
+            <!-- Bulk Upload Section -->
+            <section id="bulk-upload-section" class="card">
+                <h2>Bulk Upload Dataset</h2>
+                <p class="subtitle">Upload entire Kaggle dataset folders at once</p>
+                
+                <div class="bulk-upload-area" id="bulk-upload-area">
+                    <div class="upload-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="upload-text">Select a folder or multiple files for bulk upload</p>
+                        <p class="upload-hint">Supports folders with multiple ECG images. Files will be organized by folder name or filename pattern.</p>
+                        <input type="file" id="bulk-file-input" webkitdirectory directory multiple accept="image/*" style="display: none;">
+                        <button id="select-folder-btn" class="btn btn-primary" style="margin-top: 1rem;">Select Folder</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="auto-record-id" checked>
+                        Auto-detect record ID from folder/filename
+                    </label>
+                    <small>If unchecked, all files will use the same record ID</small>
+                </div>
+
+                <div class="form-group" id="manual-record-id-group" style="display: none;">
+                    <label for="bulk-record-id">Record ID for all files:</label>
+                    <input type="text" id="bulk-record-id" placeholder="e.g., KAGGLE_DATASET">
+                </div>
+
+                <div id="bulk-file-list" class="file-list"></div>
+
+                <div class="button-group">
+                    <button id="bulk-upload-btn" class="btn btn-primary" disabled>Start Bulk Upload</button>
+                    <button id="bulk-clear-btn" class="btn btn-secondary">Clear</button>
+                </div>
+
+                <div id="bulk-upload-progress" class="progress-container" style="display: none;">
+                    <div class="progress-bar">
+                        <div id="bulk-progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="bulk-progress-text" class="progress-text">Preparing bulk upload...</p>
+                    <div id="bulk-stats" style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-secondary);"></div>
+                </div>
+            </section>
+
+            <!-- Records Section -->
+            <section id="records-section" class="card">
+                <h2>ECG Records</h2>
+                <div id="records-list" class="records-list">
+                    <p class="empty-state">No ECG records yet. Upload images to get started.</p>
+                </div>
+            </section>
+
+            <!-- Processing Status -->
+            <section id="processing-section" class="card" style="display: none;">
+                <h2>Processing Status</h2>
+                <div id="processing-status" class="processing-status"></div>
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <div class="version-info">
+                <span>Version: <span id="app-version">1.0.0</span></span>
+                <span class="separator">|</span>
+                <span>Build: <span id="app-build-timestamp">Loading...</span></span>
+                <span class="separator">|</span>
+                <span>Firebase SDK: 10.7.1</span>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+    <script>
+        // Set build timestamp dynamically with deployment time
+        document.addEventListener('DOMContentLoaded', () => {
+            const now = new Date();
+            // Format: YYYY.MM.DD.HHMM (e.g., 2026.01.13.1601)
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const buildTimestamp = `${year}.${month}.${day}.${hours}${minutes}`;
+            
+            const buildElement = document.getElementById('app-build-timestamp');
+            if (buildElement) {
+                buildElement.textContent = buildTimestamp;
+                buildElement.title = `Deployed: ${now.toLocaleString()}`;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Service account keys (DO NOT COMMIT!)
+service-account-key.json
+*.json
+!firebase.json
+!package.json
+!tsconfig.json
+
+# Kaggle credentials (DO NOT COMMIT!)
+.kaggle/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Data files (large)
+data/
+*.parquet
+*.h5
+*.hdf5
+
+# Logs
+*.log
+logs/

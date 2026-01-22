@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ECG records collection
+    match /ecg_records/{recordId} {
+      // Users can read (get and list) their own records
+      // Queries must filter by userId == request.auth.uid
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      // Users can write (update/delete) their own records
+      allow write: if request.auth != null && request.auth.uid == resource.data.userId;
+      // Users can create records for themselves
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+      
+      // ECG images subcollection
+      match /images/{imageId} {
+        allow read, write: if request.auth != null && request.auth.uid == get(/databases/$(database)/documents/ecg_records/$(recordId)).data.userId;
+      }
+      
+      // Processing results subcollection
+      match /results/{resultId} {
+        allow read, write: if request.auth != null && request.auth.uid == get(/databases/$(database)/documents/ecg_records/$(recordId)).data.userId;
+      }
+    }
+    
+    // User profiles
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECG Image Gallery</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .gallery-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        
+        .gallery-item {
+            background: var(--card-bg);
+            border-radius: 0.5rem;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+        }
+        
+        .gallery-item:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .gallery-item img {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .gallery-item-info {
+            padding: 1rem;
+        }
+        
+        .gallery-item-info h3 {
+            font-size: 0.875rem;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+            word-break: break-all;
+        }
+        
+        .gallery-item-info p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+        
+        .version-footer {
+            margin-top: 4rem;
+            padding: 2rem 0;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+        }
+        
+        .version-info {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.75rem;
+            white-space: nowrap;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        .version-info:hover {
+            background-color: #e9ecef;
+        }
+        
+        .version-info .separator {
+            color: #ccc;
+            margin: 0 0.25rem;
+        }
+        
+        .version-copy-btn {
+            margin-left: 1rem;
+            padding: 0.5rem 1rem;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background-color 0.2s;
+        }
+        
+        .version-copy-btn:hover {
+            background: var(--primary-hover);
+        }
+        
+        .version-copy-btn.copied {
+            background: var(--success-color);
+        }
+    </style>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getStorage, ref, listAll, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        
+        // Initialize Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsIWxy1gTV1_e9ZXZnaplcOWqU9PwL_Uc",
+            authDomain: "hv-ecg.firebaseapp.com",
+            projectId: "hv-ecg",
+            storageBucket: "hv-ecg.appspot.com",
+            messagingSenderId: "101881880910",
+            appId: "1:101881880910:web:2320e56f5dcaaa46febe1f"
+        };
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const storage = getStorage(app);
+        
+        // Auto sign in anonymously
+        signInAnonymously(auth).catch(console.error);
+        
+        // Version info
+        const APP_VERSION = '2.3.4';
+        const BUILD_TIMESTAMP = '2026.01.21.2253';
+        const BUILD_DATE = new Date();
+        
+        // Python service URL (Cloud Run)
+        const PYTHON_SERVICE_URL = 'https://ecg-multi-method-101881880910.us-central1.run.app';
+        
+        // GCS Configuration
+        const GCS_BUCKETS = [
+            'ecg-competition-data-1',
+            'ecg-competition-data-2',
+            'ecg-competition-data-3',
+            'ecg-competition-data-4',
+            'ecg-competition-data-5'
+        ];
+        const GCS_PREFIX = 'kaggle-data/physionet-ecg/';
+        const MANIFEST_URL = '/gcs_images_manifest.json'; // Hosted on Firebase Hosting
+        
+        // Global state
+        let images = [];
+        let allGroups = [];
+        let displayedGroups = 0;
+        const GROUPS_PER_PAGE = 3;  // Show 3 groups at a time
+        const IMAGES_PER_PAGE = 30; // Or 30 images total
+        
+        // Load images from GCS buckets via manifest
+        async function loadImages() {
+            const galleryGrid = document.getElementById('gallery-grid');
+            const loadingEl = document.getElementById('loading');
+            
+            loadingEl.textContent = 'Loading images from GCS...';
+            
+            try {
+                // Try to load from manifest
+                let manifestData = null;
+                try {
+                    const manifestResponse = await fetch(MANIFEST_URL);
+                    if (manifestResponse.ok) {
+                        manifestData = await manifestResponse.json();
+                        console.log('✓ Loaded manifest from', MANIFEST_URL);
+                    } else {
+                        console.warn('Manifest not found, status:', manifestResponse.status);
+                    }
+                } catch (e) {
+                    console.warn('Manifest not available:', e);
+                }
+                
+                images = [];
+                
+                if (manifestData && manifestData.images) {
+                    // Use manifest data - handle both formats
+                    images = manifestData.images.map(img => ({
+                        name: img.name || img.filename,
+                        path: img.path || img.gcs_path,
+                        url: img.url || img.gcs_public_url,
+                        bucket: img.bucket || img.gcs_bucket,
+                        folder: img.folder || '',
+                        is_train: img.is_train || false,
+                        is_test: img.is_test || false
+                    }));
+                } else {
+                    // No manifest available
+                    loadingEl.innerHTML = `
+                        <div class="empty-state">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2"/>
+                                <path d="M9 9h6v6H9z" stroke-width="2"/>
+                            </svg>
+                            <h2>Manifest not found</h2>
+                            <p>Run: <code>python scripts/convert_manifest_for_gallery.py</code></p>
+                            <p>Then: <code>copy gcs_images_manifest.json public\gcs_images_manifest.json</code></p>
+                            <p>Then: <code>firebase deploy --only hosting</code></p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // Group images by prefix (before -) or by folder
+                const grouped = {};
+                images.forEach(img => {
+                    // Try to extract prefix before '-' in filename
+                    let groupKey = img.folder || 'other';
+                    
+                    // If filename has '-', use prefix before it
+                    if (img.name && img.name.includes('-')) {
+                        groupKey = img.name.split('-')[0];
+                    } else if (img.folder) {
+                        // Use folder name (test/train) as group
+                        groupKey = img.folder;
+                    } else {
+                        // Fallback: use first part of filename
+                        groupKey = img.name ? img.name.split('.')[0] : 'other';
+                    }
+                    
+                    if (!grouped[groupKey]) {
+                        grouped[groupKey] = {
+                            key: groupKey,
+                            images: [],
+                            folder: img.folder || '',
+                            is_train: img.is_train || false,
+                            is_test: img.is_test || false
+                        };
+                    }
+                    grouped[groupKey].images.push(img);
+                });
+                
+                // Render gallery
+                if (images.length === 0) {
+                    loadingEl.innerHTML = `
+                        <div class="empty-state">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2"/>
+                                <path d="M9 9h6v6H9z" stroke-width="2"/>
+                            </svg>
+                            <h2>No images found</h2>
+                            <p>Images are stored in GCS buckets. Generate manifest to display them.</p>
+                        </div>
+                    `;
+                } else {
+                    loadingEl.style.display = 'none';
+                    galleryGrid.innerHTML = '';
+                    
+                    // Sort groups by key
+                    const sortedGroups = Object.values(grouped).sort((a, b) => {
+                        // Put train first, then test, then others
+                        if (a.is_train && !b.is_train) return -1;
+                        if (!a.is_train && b.is_train) return 1;
+                        if (a.is_test && !b.is_test) return -1;
+                        if (!a.is_test && b.is_test) return 1;
+                        return a.key.localeCompare(b.key);
+                    });
+                    
+                    // Store groups and render with pagination
+                    allGroups = sortedGroups;
+                    displayedGroups = 0;
+                    renderGroups();
+                    
+                    console.log(`Loaded ${images.length} images in ${allGroups.length} groups from GCS`);
+                }
+            } catch (error) {
+                console.error('Error loading images:', error);
+                loadingEl.textContent = `Error: ${error.message}`;
+            }
+        }
+        
+        // Render groups with pagination
+        function renderGroups() {
+            const galleryGrid = document.getElementById('gallery-grid');
+            let imagesDisplayed = 0;
+            const maxImages = IMAGES_PER_PAGE;
+            
+            // Calculate how many groups to show
+            let groupsToShow = GROUPS_PER_PAGE;
+            let totalImagesInGroups = 0;
+            
+            for (let i = displayedGroups; i < Math.min(displayedGroups + GROUPS_PER_PAGE, allGroups.length); i++) {
+                totalImagesInGroups += allGroups[i].images.length;
+                if (totalImagesInGroups > maxImages) {
+                    groupsToShow = i - displayedGroups;
+                    break;
+                }
+            }
+            
+            // Render groups
+            for (let i = displayedGroups; i < displayedGroups + groupsToShow && i < allGroups.length; i++) {
+                const group = allGroups[i];
+                
+                // Check if we've hit image limit
+                if (imagesDisplayed + group.images.length > maxImages) {
+                    // Show partial group
+                    const remainingImages = maxImages - imagesDisplayed;
+                    if (remainingImages > 0) {
+                        renderGroup(group, remainingImages);
+                        imagesDisplayed += remainingImages;
+                    }
+                    break;
+                }
+                
+                renderGroup(group);
+                imagesDisplayed += group.images.length;
+                displayedGroups++;
+            }
+            
+            // Show/hide "Load More" button
+            updateLoadMoreButton();
+        }
+        
+        // Render a single group
+        function renderGroup(group, maxImages = null) {
+            const galleryGrid = document.getElementById('gallery-grid');
+            const imagesToShow = maxImages ? group.images.slice(0, maxImages) : group.images;
+            
+            // Add group header
+            const groupHeader = document.createElement('div');
+            groupHeader.className = 'gallery-group-header';
+            groupHeader.style.gridColumn = '1 / -1';
+            groupHeader.style.marginTop = displayedGroups === 0 ? '0' : '2rem';
+            groupHeader.style.marginBottom = '1rem';
+            groupHeader.style.padding = '0.75rem';
+            groupHeader.style.background = 'var(--card-bg)';
+            groupHeader.style.borderRadius = '0.5rem';
+            groupHeader.style.borderLeft = '4px solid var(--primary-color)';
+            
+            const groupLabel = group.folder || group.key;
+            const groupType = group.is_train ? '📚 Train' : group.is_test ? '🧪 Test' : '📁';
+            groupHeader.innerHTML = `
+                <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">
+                    ${groupType} ${groupLabel}
+                </h2>
+                <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
+                    ${imagesToShow.length}${maxImages && imagesToShow.length < group.images.length ? ` of ${group.images.length}` : ''} image(s) in this group
+                </p>
+            `;
+            galleryGrid.appendChild(groupHeader);
+            
+            // Add images in this group
+            imagesToShow.forEach(img => {
+                const item = document.createElement('div');
+                item.className = 'gallery-item';
+                item.dataset.groupKey = group.key;
+                item.innerHTML = `
+                    <img src="${img.url}" alt="${img.name}" loading="lazy" 
+                         onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'%3E%3Ctext x=\\'50%25\\' y=\\'50%25\\' text-anchor=\\'middle\\'%3EFailed to load%3C/text%3E%3C/svg%3E';">
+                    <div class="gallery-item-info">
+                        <h3>${img.name}</h3>
+                        <p style="font-size: 0.7rem; color: #888;">${img.bucket || 'unknown'}</p>
+                    </div>
+                `;
+                item.onclick = () => window.open(img.url, '_blank');
+                galleryGrid.appendChild(item);
+            });
+        }
+        
+        // Update "Load More" button visibility and text
+        function updateLoadMoreButton() {
+            let loadMoreBtn = document.getElementById('load-more-btn');
+            
+            // If all groups are displayed, remove button
+            if (displayedGroups >= allGroups.length) {
+                if (loadMoreBtn) {
+                    loadMoreBtn.remove();
+                }
+                return;
+            }
+            
+            // Create button if it doesn't exist
+            if (!loadMoreBtn) {
+                loadMoreBtn = document.createElement('button');
+                loadMoreBtn.id = 'load-more-btn';
+                loadMoreBtn.className = 'load-more-btn';
+                loadMoreBtn.textContent = 'Load More Images';
+                loadMoreBtn.style.cssText = `
+                    display: block;
+                    margin: 2rem auto;
+                    padding: 0.75rem 2rem;
+                    font-size: 1rem;
+                    background: var(--primary-color);
+                    color: white;
+                    border: none;
+                    border-radius: 0.5rem;
+                    cursor: pointer;
+                    transition: background 0.2s;
+                `;
+                loadMoreBtn.onmouseover = () => loadMoreBtn.style.background = 'var(--primary-hover)';
+                loadMoreBtn.onmouseout = () => loadMoreBtn.style.background = 'var(--primary-color)';
+                loadMoreBtn.onclick = () => {
+                    loadMoreBtn.textContent = 'Loading...';
+                    loadMoreBtn.disabled = true;
+                    renderGroups();
+                    loadMoreBtn.disabled = false;
+                    loadMoreBtn.textContent = 'Load More Images';
+                };
+                
+                const galleryContainer = document.querySelector('.gallery-container');
+                if (galleryContainer) {
+                    galleryContainer.appendChild(loadMoreBtn);
+                } else {
+                    const galleryGrid = document.getElementById('gallery-grid');
+                    if (galleryGrid && galleryGrid.parentElement) {
+                        galleryGrid.parentElement.appendChild(loadMoreBtn);
+                    }
+                }
+            }
+            
+            // Update button text with remaining count
+            const remaining = allGroups.length - displayedGroups;
+            loadMoreBtn.textContent = `Load More (${remaining} group${remaining !== 1 ? 's' : ''} remaining)`;
+        }
+        
+        // Load images on page load (no auth needed for GCS)
+        document.addEventListener('DOMContentLoaded', () => {
+            loadImages();
+        });
+        
+        // Bulk testing functions
+        window.getImageAsBase64 = async function(imgElement) {
+            return new Promise((resolve) => {
+                if (imgElement.complete) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = imgElement.naturalWidth;
+                    canvas.height = imgElement.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(imgElement, 0, 0);
+                    resolve(canvas.toDataURL('image/png').split(',')[1]);
+                } else {
+                    imgElement.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = imgElement.naturalWidth;
+                        canvas.height = imgElement.naturalHeight;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(imgElement, 0, 0);
+                        resolve(canvas.toDataURL('image/png').split(',')[1]);
+                    };
+                }
+            });
+        };
+        
+        window.detectEdges = async function(imgElement, method = 'canny', crop = false) {
+            const base64 = await window.getImageAsBase64(imgElement);
+            const response = await fetch(`${PYTHON_SERVICE_URL}/detect-edges`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: base64, method, crop })
+            });
+            return response.json();
+        };
+        
+        window.processBatch = async function(imageElements, options = {}) {
+            const images = await Promise.all(
+                Array.from(imageElements).map(img => window.getImageAsBase64(img))
+            );
+            
+            const response = await fetch(`${PYTHON_SERVICE_URL}/process-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ images, options })
+            });
+            return response.json();
+        };
+        
+        window.processGCSBatch = async function(imagePaths, bucketName, options = {}) {
+            const response = await fetch(`${PYTHON_SERVICE_URL}/process-gcs-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_paths: imagePaths, bucket: bucketName, options })
+            });
+            return response.json();
+        };
+        
+        window.bulkTestGallery = async function(options = {}, groupKey = null) {
+            const defaultOptions = {
+                edge_detection: true,
+                color_separation: true,
+                grid_detection: true,
+                quality_check: true,
+                crop_to_content: false,
+                color_method: 'lab'
+            };
+            
+            const opts = { ...defaultOptions, ...options };
+            
+            // Get images - filter by group if specified
+            let imageElements = document.querySelectorAll('.gallery-item img');
+            
+            if (groupKey) {
+                // Filter to specific group
+                const groupItems = document.querySelectorAll(`.gallery-item[data-group-key="${groupKey}"] img`);
+                imageElements = groupItems;
+            }
+            
+            if (imageElements.length === 0) {
+                console.warn('No valid images found in gallery' + (groupKey ? ` for group: ${groupKey}` : ''));
+                return { success: false, error: 'No images found' };
+            }
+            
+            // Process up to 10 images in parallel
+            const images = Array.from(imageElements).slice(0, 10);
+            console.log(`Processing ${images.length} images${groupKey ? ` from group: ${groupKey}` : ''}...`);
+            
+            return window.processBatch(images, opts);
+        };
+        
+        // Test specific group by key
+        window.testGroup = async function(groupKey, options = {}) {
+            return window.bulkTestGallery(options, groupKey);
+        };
+        
+        window.quickBulkTest = function() {
+            return window.bulkTestGallery();
+        };
+        
+        // Copy version info function
+        window.copyVersionInfo = function() {
+            const versionEl = document.getElementById('app-version');
+            const buildEl = document.getElementById('app-build-timestamp');
+            const dateEl = document.getElementById('app-build-date');
+            const sdkEl = document.getElementById('app-firebase-sdk');
+            
+            const version = versionEl ? versionEl.textContent : APP_VERSION;
+            const build = buildEl ? buildEl.textContent : BUILD_TIMESTAMP;
+            const deployed = dateEl ? dateEl.textContent : BUILD_DATE.toLocaleString();
+            const firebaseSDK = sdkEl ? sdkEl.textContent : '10.7.1';
+            
+            const text = `Version: ${version} | Build: ${build} | Deployed: ${deployed} | Firebase SDK: ${firebaseSDK}`;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById('version-copy-btn');
+                const container = document.getElementById('version-info-container');
+                
+                if (btn) {
+                    const originalText = btn.textContent;
+                    btn.textContent = '✓ Copied!';
+                    btn.classList.add('copied');
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.classList.remove('copied');
+                    }, 2000);
+                }
+                
+                if (container) {
+                    container.style.backgroundColor = '#d4edda';
+                    setTimeout(() => {
+                        container.style.backgroundColor = '';
+                    }, 500);
+                }
+                
+                console.log('✓ Version info copied:', text);
+            }).catch(err => {
+                console.error('Copy failed:', err);
+                alert('Failed to copy. Please select and copy manually.');
+            });
+        };
+        
+        // Update version info on load
+        document.addEventListener('DOMContentLoaded', () => {
+            const versionEl = document.getElementById('app-version');
+            const buildEl = document.getElementById('app-build-timestamp');
+            const dateEl = document.getElementById('app-build-date');
+            
+            if (versionEl) versionEl.textContent = APP_VERSION;
+            if (buildEl) buildEl.textContent = BUILD_TIMESTAMP;
+            if (dateEl) dateEl.textContent = BUILD_DATE.toLocaleString();
+        });
+    </script>
+    
+    <!-- WebSocket Client (optional, for future use) -->
+    <script src="websocket_client.js"></script>
+</head>
+<body>
+    <div class="gallery-container">
+        <header>
+            <h1>ECG Image Gallery</h1>
+            <div style="margin-top: 10px;">
+                <a href="/index.html" style="color: var(--primary-color); text-decoration: underline;">← Back to Upload</a>
+            </div>
+        </header>
+        
+        <main>
+            <div id="loading" class="loading">Loading images...</div>
+            <div id="gallery-grid" class="gallery-grid"></div>
+        </main>
+        
+        <footer class="version-footer">
+            <div class="version-info" id="version-info-container" onclick="copyVersionInfo()" title="Click to copy version info">
+                <span>Version: <span id="app-version">Loading...</span></span>
+                <span class="separator">|</span>
+                <span>Build: <span id="app-build-timestamp">Loading...</span></span>
+                <span class="separator">|</span>
+                <span>Deployed: <span id="app-build-date">Loading...</span></span>
+                <span class="separator">|</span>
+                <span>Firebase SDK: <span id="app-firebase-sdk">10.7.1</span></span>
+            </div>
+            <button class="version-copy-btn" id="version-copy-btn" onclick="copyVersionInfo()">📋 Copy</button>
+        </footer>
+    </div>
+</body>
+</html>

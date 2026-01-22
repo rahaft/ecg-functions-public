@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECG Visualization & Results</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .visualization-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .back-button {
+            margin-bottom: 1rem;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0;
+        }
+
+        .tab {
+            padding: 15px 30px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+        }
+
+        .tab:hover {
+            color: var(--primary-color);
+        }
+
+        .tab.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .image-viewer {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .image-panel {
+            background: var(--bg-color);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .image-panel h3 {
+            margin-bottom: 15px;
+            color: var(--text-primary);
+        }
+
+        .image-panel img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            border: 2px solid var(--border-color);
+        }
+
+        .ecg-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .lead-card {
+            background: var(--bg-color);
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: var(--shadow);
+        }
+
+        .lead-card h4 {
+            margin-bottom: 10px;
+            color: var(--primary-color);
+            font-size: 1.2em;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 200px;
+            background: white;
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, var(--primary-color) 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .metric-card h3 {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .metric-card .value {
+            font-size: 2.5em;
+            font-weight: bold;
+        }
+
+        .metric-card .unit {
+            font-size: 0.8em;
+            opacity: 0.8;
+            margin-left: 5px;
+        }
+
+        .comparison-view {
+            background: var(--bg-color);
+            border-radius: 15px;
+            padding: 30px;
+        }
+
+        .comparison-chart {
+            height: 400px;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .download-section {
+            text-align: center;
+            margin-top: 30px;
+            padding: 30px;
+            background: var(--bg-color);
+            border-radius: 15px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .error {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--error-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin: 1rem 0;
+        }
+
+        @media (max-width: 768px) {
+            .image-viewer {
+                grid-template-columns: 1fr;
+            }
+
+            .ecg-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .tabs {
+                overflow-x: auto;
+            }
+        }
+
+        /* Footer Styles */
+        .app-footer {
+            margin-top: 3rem;
+            padding: 1.5rem 0;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .version-info {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .version-info .separator {
+            color: var(--border-color);
+        }
+
+        .version-info span:not(.separator) {
+            white-space: nowrap;
+        }
+
+        @media (max-width: 768px) {
+            .version-info {
+                font-size: 0.75rem;
+                gap: 0.5rem;
+            }
+        }
+    </style>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getStorage } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        import { getFunctions } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';
+        
+        // Initialize Firebase (using hv-ecg project config)
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsIWxy1gTV1_e9ZXZnaplcOWqU9PwL_Uc",
+            authDomain: "hv-ecg.firebaseapp.com",
+            projectId: "hv-ecg",
+            storageBucket: "hv-ecg.appspot.com",
+            messagingSenderId: "101881880910",
+            appId: "1:101881880910:web:2320e56f5dcaaa46febe1f"
+        };
+        
+        try {
+            const app = initializeApp(firebaseConfig);
+            window.auth = getAuth(app);
+            window.storage = getStorage(app);
+            window.db = getFirestore(app);
+            window.functions = getFunctions(app);
+            console.log('Firebase initialized successfully');
+        } catch (error) {
+            console.error('Firebase initialization error:', error);
+            alert('Failed to initialize Firebase: ' + error.message);
+        }
+    </script>
+</head>
+<body>
+    <div class="visualization-container">
+        <button class="btn btn-secondary back-button" onclick="window.location.href='index.html'">← Back to Records</button>
+        
+        <div class="card">
+            <h1>📊 ECG Analysis Results</h1>
+            <p class="subtitle">Digitized ECG Time-Series Visualization</p>
+
+            <div id="loading" class="loading">Loading record data...</div>
+            <div id="error" class="error" style="display: none;"></div>
+            <div id="content" style="display: none;">
+                <!-- Tabs -->
+                <div class="tabs">
+                    <button class="tab active" data-tab="overview">Overview</button>
+                    <button class="tab" data-tab="signals">Signal Analysis</button>
+                    <button class="tab" data-tab="comparison">Comparison</button>
+                    <button class="tab" data-tab="export">Export & Download</button>
+                </div>
+
+                <!-- Overview Tab -->
+                <div class="tab-content active" id="overview">
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <h3>Signal Quality (SNR)</h3>
+                            <div class="value" id="snr-value">--</div>
+                            <span class="unit">dB</span>
+                        </div>
+                        <div class="metric-card">
+                            <h3>Processing Status</h3>
+                            <div class="status-badge" id="status-badge">--</div>
+                        </div>
+                        <div class="metric-card">
+                            <h3>Leads Extracted</h3>
+                            <div class="value" id="leads-count">--</div>
+                            <span class="unit">leads</span>
+                        </div>
+                        <div class="metric-card">
+                            <h3>Duration</h3>
+                            <div class="value" id="duration-value">--</div>
+                            <span class="unit">sec</span>
+                        </div>
+                    </div>
+
+                    <div class="image-viewer">
+                        <div class="image-panel">
+                            <h3>Original ECG Image</h3>
+                            <img id="original-image" src="" alt="Original ECG" style="display: none;">
+                            <p id="no-image" style="color: var(--text-secondary);">No image available</p>
+                        </div>
+                        <div class="image-panel">
+                            <h3>Record Information</h3>
+                            <div id="record-info" style="text-align: left; color: var(--text-secondary);"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Signal Analysis Tab -->
+                <div class="tab-content" id="signals">
+                    <h2 style="margin-bottom: 20px; color: var(--text-primary);">12-Lead ECG Signals</h2>
+                    <div class="ecg-grid" id="ecg-leads-grid">
+                        <!-- Lead cards will be dynamically inserted here -->
+                    </div>
+                </div>
+
+                <!-- Comparison Tab -->
+                <div class="tab-content" id="comparison">
+                    <div class="comparison-view">
+                        <h2 style="margin-bottom: 20px; color: var(--text-primary);">Signal Visualization</h2>
+                        <div class="comparison-chart">
+                            <canvas id="comparison-chart"></canvas>
+                        </div>
+                        <p style="text-align: center; color: var(--text-secondary); margin-top: 20px;">
+                            Extracted ECG Signal
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Export Tab -->
+                <div class="tab-content" id="export">
+                    <div class="download-section">
+                        <h2 style="margin-bottom: 20px;">Export Options</h2>
+                        <p style="margin-bottom: 30px; color: var(--text-secondary);">Download your processed ECG data in various formats</p>
+                        
+                        <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
+                            <button class="btn btn-primary" onclick="downloadJSON()">📄 Download JSON</button>
+                            <button class="btn btn-primary" onclick="downloadCSV()">📊 Download CSV</button>
+                            <button class="btn btn-primary" onclick="downloadSubmission()">🏆 Kaggle Submission</button>
+                        </div>
+
+                        <div style="margin-top: 40px; text-align: left; max-width: 600px; margin-left: auto; margin-right: auto;">
+                            <h3 style="margin-bottom: 15px;">Export Formats:</h3>
+                            <ul style="line-height: 2; color: var(--text-secondary);">
+                                <li><strong>JSON:</strong> Complete data including metadata and quality metrics</li>
+                                <li><strong>CSV:</strong> Time-series data for each lead (easy to import)</li>
+                                <li><strong>Kaggle Submission:</strong> Competition-ready format (id, value)</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="app-footer">
+            <div class="version-info">
+                <span>Version: <span id="app-version">1.0.0</span></span>
+                <span class="separator">|</span>
+                <span>Build: <span id="app-build-timestamp">Loading...</span></span>
+                <span class="separator">|</span>
+                <span>Firebase SDK: 10.7.1</span>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="visualization.js"></script>
+    <script>
+        // Set build timestamp dynamically with deployment time
+        document.addEventListener('DOMContentLoaded', () => {
+            const now = new Date();
+            // Format: YYYY.MM.DD.HHMM (e.g., 2026.01.13.1601)
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const buildTimestamp = `${year}.${month}.${day}.${hours}${minutes}`;
+            
+            const buildElement = document.getElementById('app-build-timestamp');
+            if (buildElement) {
+                buildElement.textContent = buildTimestamp;
+                buildElement.title = `Deployed: ${now.toLocaleString()}`;
+            }
+        });
+    </script>
+</body>
+</html>

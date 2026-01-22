@@ -1,0 +1,151 @@
+# ECG Kaggle Pipeline - Code Integrity Rules
+
+## 🎯 Context
+This is a Kaggle competition submission pipeline for ECG image digitization. **ALL code must work offline without internet access.**
+
+## ⚠️ CRITICAL CONSTRAINTS
+
+### 1. Package Imports (STRICTLY ENFORCED)
+**ONLY these packages are allowed:**
+- `torch`, `torchvision` (PyTorch)
+- `cv2` (OpenCV)
+- `numpy`
+- `pandas`
+- `sklearn` (scikit-learn)
+- `matplotlib` (for visualization only, won't run in Kaggle)
+- `scipy`
+- `skimage` (scikit-image)
+- `PIL` (Pillow)
+
+**FORBIDDEN imports:**
+- `requests`, `urllib`, `urllib3` - NO internet access
+- `wget`, `download` - NO downloads
+- `pip`, `subprocess` (for installs) - NO package installation
+- `socket`, `http.client` - NO network calls
+- Any package not pre-installed in Kaggle kernels
+
+**Before adding ANY import:**
+1. Check: Is this in the allowed list above?
+2. Check: Does Kaggle pre-install this?
+3. If unsure, **DO NOT ADD IT** - ask first
+
+### 2. Internet Access (ABSOLUTELY FORBIDDEN)
+**NEVER use:**
+- `requests.get()`, `requests.post()`
+- `urllib.request.urlopen()`
+- `wget.download()`
+- `subprocess.run(['pip', 'install', ...])`
+- Any HTTP/HTTPS calls
+- Model downloads from URLs
+- API calls
+
+**All models MUST be:**
+- Pre-uploaded to Kaggle Datasets
+- Loaded from `/kaggle/input/` paths
+- Never downloaded at runtime
+
+### 3. File Paths (ENVIRONMENT-AGNOSTIC)
+**MUST use environment detection:**
+```python
+def get_environment():
+    if '/kaggle/input' in os.getcwd():
+        return 'kaggle'
+    elif '/content/drive' in os.getcwd():
+        return 'colab'
+    else:
+        return 'local'
+
+ENV = get_environment()
+MODEL_DIR = {
+    'kaggle': '/kaggle/input/ecg-models',
+    'colab': '/content/drive/MyDrive/ECG/models',
+    'local': './models'
+}[ENV]
+```
+
+**FORBIDDEN:**
+- Hard-coded absolute paths
+- URLs (http://, https://)
+- `/tmp/`, `/home/` (not portable)
+- Paths that only work in one environment
+
+### 4. Protected Files (DO NOT EDIT WITHOUT PERMISSION)
+**These files are CRITICAL for Kaggle submission:**
+- `kaggle_submission/submission.py` - Main Kaggle kernel code
+- `requirements_kaggle.txt` - Kaggle package list
+- `src/utils/compliance.py` - Compliance checker
+- `src/utils/environment.py` - Environment detection
+- Any file marked `[KAGGLE_COMPLIANT]` or `[PROTECTED]`
+
+**Before editing protected files:**
+1. Ask: "Is this change necessary for Kaggle?"
+2. Verify: Will this break offline mode?
+3. Test: Run compliance checker after changes
+
+### 5. Safe Edits (ALLOWED)
+**You CAN safely edit:**
+- `src/config/hyperparams.yaml` - Hyperparameters
+- `src/processors/*.py` - Processing logic (if marked editable)
+- `tests/*.py` - Test files
+- Visualization code (won't run in Kaggle anyway)
+
+## 🔍 Before Suggesting ANY Code Change
+
+**Checklist:**
+1. ✅ Is this import in the allowed list?
+2. ✅ Does this require internet? (If yes, REJECT)
+3. ✅ Are paths environment-agnostic?
+4. ✅ Is this file protected? (If yes, ask permission)
+5. ✅ Will this work offline?
+6. ✅ Does this match Kaggle kernel constraints?
+
+## 🚨 Red Flags (STOP AND ASK)
+
+If you see or are asked to add:
+- `import requests` → **STOP** - Internet access forbidden
+- `pip install` → **STOP** - No package installation
+- `download()` → **STOP** - No downloads
+- Hard-coded URL → **STOP** - Use environment detection
+- New package import → **STOP** - Verify Kaggle compatibility first
+
+## 📝 Code Review Process
+
+**Before committing Kaggle-related code:**
+1. Run compliance checker: `python -m src.utils.compliance --check-all`
+2. Test offline mode: `python -m tests.test_offline`
+3. Verify environment detection works
+4. Check submission format: `python -m src.utils.submission_validator`
+
+## 🎯 Goal
+**Maintain identical code that works in:**
+- Local development
+- Google Colab
+- Kaggle kernels (offline)
+
+**Only paths should differ, never logic or imports.**
+
+## 💡 Example: CORRECT vs WRONG
+
+**❌ WRONG:**
+```python
+import requests  # FORBIDDEN
+model = requests.get('https://example.com/model.pth')  # FORBIDDEN
+MODEL_DIR = '/home/user/models'  # FORBIDDEN - hard-coded
+```
+
+**✅ CORRECT:**
+```python
+import torch  # ALLOWED
+import cv2  # ALLOWED
+ENV = get_environment()  # Environment detection
+MODEL_DIR = {
+    'kaggle': '/kaggle/input/ecg-models',
+    'colab': '/content/drive/MyDrive/ECG/models',
+    'local': './models'
+}[ENV]
+model = torch.load(f'{MODEL_DIR}/model.pth')  # Load from local path
+```
+
+---
+
+**Remember: When in doubt, ASK. It's better to be cautious than break Kaggle submission.**

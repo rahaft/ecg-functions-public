@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECG Pipeline Test - hv-ecg</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .header p { font-size: 1.1em; opacity: 0.9; }
+        .content {
+            padding: 30px;
+        }
+        .upload-section {
+            background: #f8f9fa;
+            border: 3px dashed #667eea;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        .file-input {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        .file-label {
+            display: inline-block;
+            padding: 15px 30px;
+            background: #667eea;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .process-btn {
+            margin-top: 20px;
+            padding: 15px 40px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .results {
+            display: none;
+            margin-top: 30px;
+        }
+        .results-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .result-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .result-card img {
+            width: 100%;
+            border-radius: 6px;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .metric-card {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ Enhanced ECG Digitization Pipeline</h1>
+            <p>Test the new polynomial grid detection system</p>
+            <p style="font-size: 0.9em; margin-top: 10px;"><a href="/" style="color: white; text-decoration: underline;">← Back to Main App</a></p>
+        </div>
+        <div class="content">
+            <div class="upload-section" id="uploadSection">
+                <h2>Upload ECG Image</h2>
+                <div class="file-input-wrapper">
+                    <input type="file" id="fileInput" class="file-input" accept="image/*">
+                    <label for="fileInput" class="file-label">📁 Choose Image</label>
+                </div>
+                <div id="filename" style="margin-top: 10px; color: #666;"></div>
+                <button class="process-btn" id="processBtn" onclick="processImage()" disabled>🚀 Process Image</button>
+            </div>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Processing image... This may take a moment.</p>
+                <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Note: This uses the enhanced pipeline with polynomial grid detection</p>
+            </div>
+            
+            <div class="error" id="error" style="display: none;"></div>
+            
+            <div class="results" id="results">
+                <h2>Results</h2>
+                <div class="results-grid">
+                    <div class="result-card">
+                        <h3>Grid Detection</h3>
+                        <img id="gridImage" alt="Grid visualization">
+                    </div>
+                    <div class="result-card">
+                        <h3>Signal Plots</h3>
+                        <img id="signalImage" alt="Signal plots">
+                    </div>
+                </div>
+                <div class="metrics" id="metrics"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const processBtn = document.getElementById('processBtn');
+        const filename = document.getElementById('filename');
+        
+        fileInput.addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                filename.textContent = 'Selected: ' + e.target.files[0].name;
+                processBtn.disabled = false;
+            }
+        });
+        
+        async function processImage() {
+            const file = fileInput.files[0];
+            if (!file) return;
+            
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            processBtn.disabled = true;
+            
+            // Note: This page expects a backend API endpoint
+            // For now, it will show an informational message
+            // You'll need to connect it to your Firebase Functions or deploy the Python pipeline
+            
+            setTimeout(() => {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').innerHTML = `
+                    <strong>Backend Connection Needed</strong><br>
+                    To use the enhanced digitization pipeline on the Firebase website, you need to:<br><br>
+                    1. Deploy the Python pipeline as a Cloud Function or Cloud Run service<br>
+                    2. Update Firebase Functions to call the enhanced pipeline<br>
+                    3. Connect this page to process images through Firebase Storage<br><br>
+                    <strong>For now, you can test locally:</strong><br>
+                    Run <code>python functions_python/live_test_server.py</code> and visit <code>http://localhost:5000</code>
+                `;
+                processBtn.disabled = false;
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

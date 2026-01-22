@@ -1,0 +1,41 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // ECG images storage - user-specific
+    match /ecg_images/{userId}/{recordId}/{fileName} {
+      // Allow authenticated users to upload their own files
+      allow write: if request.auth != null && request.auth.uid == userId;
+      // Allow users to read their own files
+      allow read: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Public read access for processed results (optional)
+    match /ecg_results/{userId}/{recordId}/{fileName} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Isolated images - allow authenticated users to read/write
+    match /isolated/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Train folder - allow authenticated users to read/write
+    match /train/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Test folder - allow authenticated users to read/write
+    match /test/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // Allow read access to all paths for authenticated users
+    match /{allPaths=**} {
+      allow read: if request.auth != null;
+    }
+  }
+}
