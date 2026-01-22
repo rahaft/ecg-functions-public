@@ -154,8 +154,8 @@
         signInAnonymously(auth).catch(console.error);
         
         // Version info
-        const APP_VERSION = '2.3.5';
-        const BUILD_TIMESTAMP = '2026.01.22.0055';
+        const APP_VERSION = '2.3.6';
+        const BUILD_TIMESTAMP = '2026.01.22.0147';
         const BUILD_DATE = new Date();
         
         // Python service URL (Cloud Run)
@@ -296,6 +296,9 @@
                     displayedGroups = 0;
                     renderGroups();
                     
+                    // Populate dropdown
+                    populateGroupDropdown();
+                    
                     console.log(`Loaded ${images.length} images in ${allGroups.length} groups from GCS`);
                 }
             } catch (error) {
@@ -344,6 +347,7 @@
             // Add group header
             const groupHeader = document.createElement('div');
             groupHeader.className = 'gallery-group-header';
+            groupHeader.dataset.groupKey = group.key;
             groupHeader.style.gridColumn = '1 / -1';
             groupHeader.style.marginTop = displayedGroups === 0 ? '0' : '2rem';
             groupHeader.style.marginBottom = '1rem';
@@ -359,21 +363,41 @@
             
             groupHeader.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                    <div>
+                    <div style="flex: 1;">
                         <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">
                             ${groupType} ${groupLabel}
+                            ${isProcessed ? ' <span style="color: green; font-size: 0.875rem;">✓ Processed</span>' : ''}
+                            ${isProcessing ? ' <span style="color: orange; font-size: 0.875rem;">⏳ Processing</span>' : ''}
                         </h2>
                         <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
                             ${imagesToShow.length}${maxImages && imagesToShow.length < group.images.length ? ` of ${group.images.length}` : ''} image(s) in this group
                         </p>
                     </div>
-                    <button class="process-group-btn" 
-                            data-group-key="${group.key}"
-                            onclick="processGroup('${group.key}')"
-                            ${isProcessing ? 'disabled' : ''}
-                            style="padding: 0.5rem 1rem; background: ${isProcessing ? '#ccc' : 'var(--primary-color)'}; color: white; border: none; border-radius: 0.375rem; cursor: ${isProcessing ? 'not-allowed' : 'pointer'}; font-size: 0.875rem;">
-                        ${isProcessing ? '⏳ Processing...' : isProcessed ? '🔄 Reprocess' : '⚡ Process'}
-                    </button>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        ${isProcessed ? `
+                            <button class="view-results-btn" 
+                                    data-group-key="${group.key}"
+                                    onclick="viewProcessedResults('${group.key}')"
+                                    style="padding: 0.5rem 1rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;"
+                                    title="View processed results">
+                                👁️ View Results
+                            </button>
+                            <button class="reset-group-btn" 
+                                    data-group-key="${group.key}"
+                                    onclick="resetGroupProcessing('${group.key}')"
+                                    style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;"
+                                    title="Reset processing status">
+                                🔄 Reset
+                            </button>
+                        ` : ''}
+                        <button class="process-group-btn" 
+                                data-group-key="${group.key}"
+                                onclick="processGroup('${group.key}')"
+                                ${isProcessing ? 'disabled' : ''}
+                                style="padding: 0.5rem 1rem; background: ${isProcessing ? '#ccc' : 'var(--primary-color)'}; color: white; border: none; border-radius: 0.375rem; cursor: ${isProcessing ? 'not-allowed' : 'pointer'}; font-size: 0.875rem;">
+                            ${isProcessing ? '⏳ Processing...' : isProcessed ? '🔄 Reprocess' : '⚡ Process'}
+                        </button>
+                    </div>
                 </div>
             `;
             galleryGrid.appendChild(groupHeader);
@@ -418,11 +442,30 @@
                 `;
                 item.onclick = () => {
                     if (processed && processed.images.length > 0) {
-                        openComparisonModal(group.key, img.name);
+                        // Find matching processed image
+                        const processedImg = processed.images.find(p => 
+                            p.original_name === img.name || 
+                            p.name === img.name ||
+                            p.path === img.path ||
+                            p.path === img.name
+                        );
+                        if (processedImg) {
+                            openComparisonModal(group.key, processedImg.original_name || processedImg.name);
+                        } else {
+                            // Open first processed image if exact match not found
+                            openComparisonModal(group.key, processed.images[0].original_name || processed.images[0].name);
+                        }
                     } else {
                         window.open(img.url, '_blank');
                     }
                 };
+                
+                // Add visual indicator if processed
+                if (processed && processed.images.length > 0) {
+                    item.style.border = '2px solid #28a745';
+                    item.style.cursor = 'pointer';
+                    item.title = 'Click to view processed results';
+                }
                 galleryGrid.appendChild(item);
             });
         }
@@ -650,6 +693,9 @@
             processingGroups.add(groupKey);
             updateProcessButton(groupKey, true);
             
+            // Create progress indicator
+            const progressContainer = createProgressIndicator(groupKey, group.images.length);
+            
             try {
                 // Get image paths from group
                 const imagePaths = group.images.map(img => img.path || img.name);
@@ -657,36 +703,319 @@
                 
                 console.log(`Processing group ${groupKey} with ${imagePaths.length} images`);
                 
+                // Update progress: Starting
+                updateProgress(progressContainer, 0, imagePaths.length, 'Connecting to server...');
+                
                 // Call process-gcs-batch endpoint
-                const response = await window.processGCSBatch(imagePaths, bucketName, {
-                    edge_detection: true,
-                    color_separation: true,
-                    grid_detection: true,
-                    quality_check: true,
-                    crop_to_content: false,
-                    color_method: 'lab'
+                updateProgress(progressContainer, 0, imagePaths.length, 'Processing images...');
+                const response = await fetch(`${PYTHON_SERVICE_URL}/process-gcs-batch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        image_paths: imagePaths, 
+                        bucket: bucketName, 
+                        options: {
+                            edge_detection: true,
+                            color_separation: true,
+                            grid_detection: true,
+                            quality_check: true,
+                            crop_to_content: false,
+                            color_method: 'lab'
+                        }
+                    })
                 });
                 
-                if (response.success) {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Update progress: Complete
+                    updateProgress(progressContainer, imagePaths.length, imagePaths.length, 'Complete!');
+                    
+                    // Process and store results with proper structure
+                    const processedResults = (data.results || []).map(result => {
+                        // Ensure each result has the structure needed for comparison modal
+                        const imagePath = result.path || result.name || '';
+                        const bucket = result.bucket || bucketName || GCS_BUCKETS[0];
+                        
+                        return {
+                            name: result.name || imagePath.split('/').pop() || 'unknown',
+                            original_name: result.name || imagePath.split('/').pop() || 'unknown',
+                            original_url: result.original_url || (imagePath ? `https://storage.googleapis.com/${bucket}/${imagePath}` : ''),
+                            processed_url: result.processed_url || result.original_url || '',
+                            path: imagePath,
+                            bucket: bucket,
+                            metrics: result.metrics || {},
+                            steps: result.steps || {},
+                            analysis: result.analysis || {},
+                            success: result.success !== false,
+                            // Store the full result for debugging
+                            _raw: result
+                        };
+                    });
+                    
                     // Store processed results
                     processedImages.set(groupKey, {
-                        images: response.results || [],
+                        images: processedResults,
                         subImages: {}
                     });
                     
                     // Update UI
                     updateProcessButton(groupKey, false, true);
-                    console.log(`✓ Processed group ${groupKey}`);
+                    updateGroupDropdown(); // Update dropdown status
+                    console.log(`✓ Processed group ${groupKey}`, processedResults);
+                    
+                    // Show success notification with view button
+                    showProcessingCompleteNotification(groupKey, processedResults.length);
+                    
+                    // Remove progress indicator after a delay
+                    setTimeout(() => {
+                        if (progressContainer && progressContainer.parentNode) {
+                            progressContainer.parentNode.removeChild(progressContainer);
+                        }
+                    }, 2000);
+                    
+                    // Show success notification with view button
+                    showProcessingCompleteNotification(groupKey, processedResults.length);
+                    
+                    // Auto-open comparison modal if we have results
+                    if (processedResults.length > 0) {
+                        setTimeout(() => {
+                            openComparisonModal(groupKey, processedResults[0].original_name || processedResults[0].name);
+                        }, 1000);
+                    }
+                    
+                    // Re-render the group header to show processed status
+                    const groupHeader = document.querySelector(`.gallery-group-header[data-group-key="${groupKey}"]`);
+                    if (groupHeader) {
+                        const group = allGroups.find(g => g.key === groupKey);
+                        if (group) {
+                            // Update the header to show processed status
+                            const processedBadge = groupHeader.querySelector('h2 span');
+                            if (!processedBadge) {
+                                const h2 = groupHeader.querySelector('h2');
+                                if (h2) {
+                                    h2.innerHTML += ' <span style="color: green; font-size: 0.875rem;">✓ Processed</span>';
+                                }
+                            }
+                            // Add view results and reset buttons if not present
+                            const buttonContainer = groupHeader.querySelector('div[style*="display: flex"]');
+                            if (buttonContainer) {
+                                if (!buttonContainer.querySelector('.view-results-btn')) {
+                                    const viewBtn = document.createElement('button');
+                                    viewBtn.className = 'view-results-btn';
+                                    viewBtn.dataset.groupKey = groupKey;
+                                    viewBtn.onclick = () => viewProcessedResults(groupKey);
+                                    viewBtn.style.cssText = 'padding: 0.5rem 1rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;';
+                                    viewBtn.textContent = '👁️ View Results';
+                                    viewBtn.title = 'View processed results';
+                                    buttonContainer.insertBefore(viewBtn, buttonContainer.firstChild);
+                                }
+                                if (!buttonContainer.querySelector('.reset-group-btn')) {
+                                    const resetBtn = document.createElement('button');
+                                    resetBtn.className = 'reset-group-btn';
+                                    resetBtn.dataset.groupKey = groupKey;
+                                    resetBtn.onclick = () => resetGroupProcessing(groupKey);
+                                    resetBtn.style.cssText = 'padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;';
+                                    resetBtn.textContent = '🔄 Reset';
+                                    resetBtn.title = 'Reset processing status';
+                                    buttonContainer.insertBefore(resetBtn, buttonContainer.firstChild);
+                                }
+                            }
+                        }
+                    }
                 } else {
-                    throw new Error(response.error || 'Processing failed');
+                    throw new Error(data.error || 'Processing failed');
                 }
             } catch (error) {
                 console.error('Error processing group:', error);
+                updateProgress(progressContainer, 0, group.images.length, `Error: ${error.message}`);
                 alert(`Failed to process group: ${error.message}`);
                 updateProcessButton(groupKey, false, false);
+                
+                // Remove progress indicator after error
+                setTimeout(() => {
+                    if (progressContainer && progressContainer.parentNode) {
+                        progressContainer.parentNode.removeChild(progressContainer);
+                    }
+                }, 5000);
             } finally {
                 processingGroups.delete(groupKey);
             }
+        };
+        
+        // Create progress indicator element
+        function createProgressIndicator(groupKey, totalImages) {
+            const groupHeader = document.querySelector(`.gallery-group-header`);
+            if (!groupHeader) return null;
+            
+            const progressDiv = document.createElement('div');
+            progressDiv.id = `progress-${groupKey}`;
+            progressDiv.style.cssText = `
+                margin-top: 0.5rem;
+                padding: 0.75rem;
+                background: #f0f0f0;
+                border-radius: 0.375rem;
+                font-size: 0.875rem;
+            `;
+            
+            const progressBar = document.createElement('div');
+            progressBar.style.cssText = `
+                width: 100%;
+                height: 8px;
+                background: #e0e0e0;
+                border-radius: 4px;
+                overflow: hidden;
+                margin-top: 0.5rem;
+            `;
+            
+            const progressFill = document.createElement('div');
+            progressFill.id = `progress-fill-${groupKey}`;
+            progressFill.style.cssText = `
+                height: 100%;
+                width: 0%;
+                background: var(--primary-color);
+                transition: width 0.3s ease;
+            `;
+            
+            const progressText = document.createElement('div');
+            progressText.id = `progress-text-${groupKey}`;
+            progressText.textContent = `Processing 0 of ${totalImages} images...`;
+            progressText.style.cssText = `
+                color: var(--text-secondary);
+                margin-bottom: 0.25rem;
+            `;
+            
+            progressBar.appendChild(progressFill);
+            progressDiv.appendChild(progressText);
+            progressDiv.appendChild(progressBar);
+            
+            // Insert after group header
+            groupHeader.parentNode.insertBefore(progressDiv, groupHeader.nextSibling);
+            
+            return progressDiv;
+        }
+        
+        // Update progress indicator
+        function updateProgress(container, current, total, status) {
+            if (!container) return;
+            
+            const groupKey = container.id.replace('progress-', '');
+            const progressFill = container.querySelector(`#progress-fill-${groupKey}`);
+            const progressText = container.querySelector(`#progress-text-${groupKey}`);
+            
+            if (progressFill) {
+                const percentage = total > 0 ? (current / total) * 100 : 0;
+                progressFill.style.width = `${percentage}%`;
+            }
+            
+            if (progressText) {
+                if (status) {
+                    progressText.textContent = status;
+                } else {
+                    progressText.textContent = `Processing ${current} of ${total} images...`;
+                }
+            }
+        }
+        
+        // Show processing complete notification
+        function showProcessingCompleteNotification(groupKey, resultCount) {
+            // Remove any existing notification
+            const existing = document.getElementById('processing-notification');
+            if (existing) {
+                existing.remove();
+            }
+            
+            // Create notification
+            const notification = document.createElement('div');
+            notification.id = 'processing-notification';
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: #28a745;
+                color: white;
+                padding: 1rem 1.5rem;
+                border-radius: 0.5rem;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                z-index: 10000;
+                max-width: 400px;
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            notification.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                    <div>
+                        <strong>✓ Processing Complete!</strong>
+                        <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">
+                            ${resultCount} image(s) processed successfully
+                        </p>
+                    </div>
+                    <button onclick="document.getElementById('processing-notification').remove(); viewProcessedResults('${groupKey}')"
+                            style="padding: 0.5rem 1rem; background: white; color: #28a745; border: none; border-radius: 0.375rem; cursor: pointer; font-weight: bold; font-size: 0.875rem;">
+                        View Results
+                    </button>
+                </div>
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Auto-remove after 10 seconds
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.style.animation = 'slideOut 0.3s ease-out';
+                    setTimeout(() => notification.remove(), 300);
+                }
+            }, 10000);
+        }
+        
+        // Add CSS animations for notification
+        if (!document.getElementById('notification-styles')) {
+            const style = document.createElement('style');
+            style.id = 'notification-styles';
+            style.textContent = `
+                @keyframes slideIn {
+                    from {
+                        transform: translateX(100%);
+                        opacity: 0;
+                    }
+                    to {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                }
+                @keyframes slideOut {
+                    from {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                    to {
+                        transform: translateX(100%);
+                        opacity: 0;
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // View processed results
+        window.viewProcessedResults = function(groupKey) {
+            const processed = processedImages.get(groupKey);
+            if (!processed || !processed.images || processed.images.length === 0) {
+                alert('No processed results available. Please process the group first.');
+                return;
+            }
+            
+            // Remove notification if still visible
+            const notification = document.getElementById('processing-notification');
+            if (notification) {
+                notification.remove();
+            }
+            
+            openComparisonModal(groupKey, processed.images[0].original_name || processed.images[0].name);
         };
         
         // Update process button state
@@ -696,6 +1025,24 @@
                 btn.disabled = isProcessing;
                 btn.textContent = isProcessing ? '⏳ Processing...' : (isProcessed ? '🔄 Reprocess' : '⚡ Process');
                 btn.style.background = isProcessing ? '#ccc' : 'var(--primary-color)';
+                btn.style.cursor = isProcessing ? 'not-allowed' : 'pointer';
+            }
+            
+            // Also update the group header status badge
+            const groupHeader = document.querySelector(`.gallery-group-header[data-group-key="${groupKey}"]`);
+            if (groupHeader) {
+                const h2 = groupHeader.querySelector('h2');
+                if (h2) {
+                    // Remove existing status badges
+                    h2.innerHTML = h2.innerHTML.replace(/ <span style="color: (green|orange)[^>]*>(✓ Processed|⏳ Processing)<\/span>/, '');
+                    
+                    // Add new status badge
+                    if (isProcessing) {
+                        h2.innerHTML += ' <span style="color: orange; font-size: 0.875rem;">⏳ Processing</span>';
+                    } else if (isProcessed) {
+                        h2.innerHTML += ' <span style="color: green; font-size: 0.875rem;">✓ Processed</span>';
+                    }
+                }
             }
         }
         
@@ -707,25 +1054,43 @@
         
         // Open comparison modal
         window.openComparisonModal = function(groupKey, imageName) {
+            console.log('Opening comparison modal for:', groupKey, imageName);
             const processed = processedImages.get(groupKey);
             if (!processed || !processed.images || processed.images.length === 0) {
                 alert('No processed images available. Please process the group first.');
+                console.warn('No processed images found for group:', groupKey, 'Available groups:', Array.from(processedImages.keys()));
                 return;
             }
+            
+            console.log('Found processed images:', processed.images.length, processed.images);
             
             currentComparisonGroup = groupKey;
             currentComparisonImages = processed.images;
             currentComparisonIndex = 0;
             
             const modal = document.getElementById('comparison-modal');
+            if (!modal) {
+                console.error('Comparison modal element not found!');
+                alert('Comparison modal not found. Please refresh the page.');
+                return;
+            }
+            
             modal.style.display = 'block';
+            modal.style.zIndex = '10000';
             
             // Find image index
             const imageIndex = currentComparisonImages.findIndex(img => 
-                img.name === imageName || img.original_name === imageName
+                img.name === imageName || 
+                img.original_name === imageName ||
+                img.path === imageName ||
+                (img.path && img.path.includes(imageName))
             );
             if (imageIndex >= 0) {
                 currentComparisonIndex = imageIndex;
+                console.log('Found image at index:', imageIndex);
+            } else {
+                console.log('Image not found in processed results, using first image. Looking for:', imageName);
+                console.log('Available images:', currentComparisonImages.map(img => img.name || img.original_name || img.path));
             }
             
             renderComparison();
@@ -812,11 +1177,17 @@
             
             strip.innerHTML = currentComparisonImages.map((img, index) => {
                 const isActive = index === currentComparisonIndex;
-                const thumbUrl = img.thumbnail_url || img.processed_url || img.original_url || img.url;
+                const thumbUrl = img.thumbnail_url || 
+                               img.processed_url || 
+                               img.original_url || 
+                               (img.path ? `https://storage.googleapis.com/${img.bucket || GCS_BUCKETS[0]}/${img.path}` : '') ||
+                               img.url;
                 return `
                     <div class="thumbnail-item ${isActive ? 'active' : ''}" 
-                         onclick="navigateToImage(${index})">
-                        <img src="${thumbUrl}" alt="${img.name}">
+                         onclick="navigateToImage(${index})"
+                         style="cursor: pointer;">
+                        <img src="${thumbUrl}" alt="${img.name || 'Image'}" 
+                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'%3E%3Ctext x=\\'50%25\\' y=\\'50%25\\' text-anchor=\\'middle\\'%3E?%3C/text%3E%3C/svg%3E'">
                     </div>
                 `;
             }).join('');
@@ -850,23 +1221,158 @@
             const randomIndex = Math.floor(Math.random() * allGroups.length);
             const randomGroup = allGroups[randomIndex];
             
-            // Scroll to group
-            const groupHeader = document.querySelector(`.gallery-group-header`);
-            if (groupHeader) {
-                groupHeader.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Update dropdown to show selected group
+            const dropdown = document.getElementById('group-selector');
+            if (dropdown) {
+                dropdown.value = randomGroup.key;
             }
             
-            // Highlight it briefly
-            const btn = document.querySelector(`.process-group-btn[data-group-key="${randomGroup.key}"]`);
-            if (btn) {
-                btn.style.background = '#ff6b6b';
-                setTimeout(() => {
-                    btn.style.background = 'var(--primary-color)';
-                }, 2000);
-            }
+            // Scroll to the selected group
+            scrollToGroup(randomGroup.key);
             
             console.log('Selected random group:', randomGroup.key);
         };
+        
+        // Scroll to a specific group
+        function scrollToGroup(groupKey) {
+            // Find the group
+            const groupIndex = allGroups.findIndex(g => g.key === groupKey);
+            if (groupIndex < 0) {
+                console.warn('Group not found:', groupKey);
+                return;
+            }
+            
+            // Make sure the group is displayed (load more if needed)
+            if (groupIndex >= displayedGroups) {
+                // Load groups up to and including this one
+                while (displayedGroups <= groupIndex) {
+                    const beforeCount = displayedGroups;
+                    renderGroups();
+                    // Safety check to prevent infinite loop
+                    if (displayedGroups === beforeCount) {
+                        break;
+                    }
+                }
+            }
+            
+            // Wait a bit for DOM to update, then scroll
+            setTimeout(() => {
+                const groupHeader = document.querySelector(`.gallery-group-header[data-group-key="${groupKey}"]`);
+                if (groupHeader) {
+                    groupHeader.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    
+                    // Highlight it briefly
+                    const originalBg = groupHeader.style.background;
+                    groupHeader.style.background = '#fff3cd';
+                    groupHeader.style.transition = 'background 0.3s';
+                    setTimeout(() => {
+                        groupHeader.style.background = originalBg || 'var(--card-bg)';
+                    }, 2000);
+                } else {
+                    console.warn('Group header not found after loading:', groupKey);
+                }
+            }, 100);
+        }
+        
+        // Handle dropdown selection change
+        window.selectGroupFromDropdown = function() {
+            const dropdown = document.getElementById('group-selector');
+            if (dropdown && dropdown.value) {
+                scrollToGroup(dropdown.value);
+            }
+        };
+        
+        // Reset processing for a group
+        window.resetGroupProcessing = function(groupKey) {
+            if (confirm(`Reset processing status for group ${groupKey}?`)) {
+                processedImages.delete(groupKey);
+                processingGroups.delete(groupKey);
+                
+                // Update the button
+                updateProcessButton(groupKey, false, false);
+                
+                // Update dropdown indicator
+                updateGroupDropdown();
+                
+                // Remove any progress indicators
+                const progressContainer = document.getElementById(`progress-${groupKey}`);
+                if (progressContainer && progressContainer.parentNode) {
+                    progressContainer.parentNode.removeChild(progressContainer);
+                }
+                
+                // Update group header to remove processed status
+                const groupHeader = document.querySelector(`.gallery-group-header[data-group-key="${groupKey}"]`);
+                if (groupHeader) {
+                    const h2 = groupHeader.querySelector('h2');
+                    if (h2) {
+                        // Remove processed badge
+                        h2.innerHTML = h2.innerHTML.replace(/ <span style="color: green[^>]*>✓ Processed<\/span>/, '');
+                        h2.innerHTML = h2.innerHTML.replace(/ <span style="color: orange[^>]*>⏳ Processing<\/span>/, '');
+                    }
+                    
+                    // Remove reset button
+                    const resetBtn = groupHeader.querySelector('.reset-group-btn');
+                    if (resetBtn && resetBtn.parentNode) {
+                        resetBtn.parentNode.removeChild(resetBtn);
+                    }
+                }
+                
+                console.log(`Reset processing for group: ${groupKey}`);
+            }
+        };
+        
+        // Populate group dropdown
+        function populateGroupDropdown() {
+            const dropdown = document.getElementById('group-selector');
+            if (!dropdown) return;
+            
+            // Clear existing options (except the first placeholder)
+            while (dropdown.options.length > 1) {
+                dropdown.remove(1);
+            }
+            
+            // Add all groups
+            allGroups.forEach(group => {
+                const option = document.createElement('option');
+                option.value = group.key;
+                const groupLabel = group.folder || group.key;
+                const groupType = group.is_train ? '📚 Train' : group.is_test ? '🧪 Test' : '📁';
+                option.text = `${groupType} ${groupLabel} (${group.images.length} images)`;
+                dropdown.appendChild(option);
+            });
+            
+            // Update status indicators
+            updateGroupDropdown();
+        }
+        
+        // Update group dropdown with processing status
+        function updateGroupDropdown() {
+            const dropdown = document.getElementById('group-selector');
+            if (!dropdown) return;
+            
+            // Update each option to show processing status
+            Array.from(dropdown.options).forEach(option => {
+                if (option.value) {
+                    const isProcessed = processedImages.has(option.value);
+                    const isProcessing = processingGroups.has(option.value);
+                    
+                    // Remove existing indicators
+                    let text = option.text;
+                    if (text.includes(' ✓') || text.includes(' ⏳')) {
+                        text = text.split(' ✓')[0].split(' ⏳')[0];
+                    }
+                    
+                    // Add status indicator
+                    if (isProcessing) {
+                        option.text = `${text} ⏳`;
+                    } else if (isProcessed) {
+                        option.text = `${text} ✓`;
+                    } else {
+                        option.text = text;
+                    }
+                }
+            });
+        }
     </script>
     
     <!-- WebSocket Client (optional, for future use) -->

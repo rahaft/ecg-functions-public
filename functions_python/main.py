@@ -454,11 +454,13 @@ if FLASK_AVAILABLE:
             })
             
         except Exception as e:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': str(e),
                 'type': type(e).__name__
-            }), 500
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
     
     @app.route('/analyze-fit', methods=['POST'])
     def analyze_fit():
@@ -502,11 +504,13 @@ if FLASK_AVAILABLE:
             })
             
         except Exception as e:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': str(e),
                 'type': type(e).__name__
-            }), 500
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
     
     @app.route('/execute-step', methods=['POST'])
     def execute_step():
@@ -1070,11 +1074,13 @@ if FLASK_AVAILABLE:
             return jsonify(response)
             
         except Exception as e:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': str(e),
                 'type': type(e).__name__
-            }), 500
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
     
     @app.route('/process-batch', methods=['POST'])
     def process_batch_endpoint():
@@ -1227,13 +1233,15 @@ if FLASK_AVAILABLE:
             })
             
         except Exception as e:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': str(e),
                 'type': type(e).__name__
-            }), 500
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
     
-    @app.route('/process-gcs-batch', methods=['POST'])
+    @app.route('/process-gcs-batch', methods=['POST', 'OPTIONS'])
     def process_gcs_batch_endpoint():
         """
         Process multiple images from GCS buckets in batch.
@@ -1252,12 +1260,22 @@ if FLASK_AVAILABLE:
             }
         }
         """
+        # Handle CORS preflight
+        if request.method == 'OPTIONS':
+            response = jsonify({'status': 'ok'})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
+            return response
+        
         try:
             from google.cloud import storage
             from concurrent.futures import ThreadPoolExecutor, as_completed
             
             if not TRANSFORMERS_AVAILABLE:
-                return jsonify({'error': 'Transformers not available'}), 500
+                response = jsonify({'error': 'Transformers not available'})
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 500
             
             from transformers.edge_detector import detect_edges, crop_to_content
             from transformers.color_separation import ColorSeparator
@@ -1270,13 +1288,19 @@ if FLASK_AVAILABLE:
             options = data.get('options', {})
             
             if not image_paths:
-                return jsonify({'error': 'image_paths array required'}), 400
+                response = jsonify({'error': 'image_paths array required'})
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 400
             
             if not bucket_name:
-                return jsonify({'error': 'bucket name required'}), 400
+                response = jsonify({'error': 'bucket name required'})
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 400
             
             if len(image_paths) > 20:
-                return jsonify({'error': 'Maximum 20 images per batch'}), 400
+                response = jsonify({'error': 'Maximum 20 images per batch'})
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 400
             
             # Initialize GCS client
             storage_client = storage.Client()
@@ -1400,22 +1424,33 @@ if FLASK_AVAILABLE:
             # Sort by index
             results.sort(key=lambda x: x['index'])
             
-            return jsonify({
+            response = jsonify({
                 'success': True,
                 'count': len(results),
                 'bucket': bucket_name,
                 'results': results
             })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response
             
         except Exception as e:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': str(e),
                 'type': type(e).__name__
-            }), 500
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
     
-    @app.route('/process-comprehensive', methods=['POST'])
+    @app.route('/process-comprehensive', methods=['POST', 'OPTIONS'])
     def process_comprehensive_endpoint():
+        # Handle CORS preflight
+        if request.method == 'OPTIONS':
+            response = jsonify({'status': 'ok'})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
+            return response
         """
         Comprehensive image processing with SNR calculation and full analysis.
         
@@ -1574,14 +1609,18 @@ if FLASK_AVAILABLE:
             processed_base64 = base64.b64encode(buffer).decode('utf-8')
             result['processed_image'] = processed_base64
             
-            return jsonify(result)
+            response = jsonify(result)
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response
             
         except Exception as e:
-            return jsonify({
+            response = jsonify({
                 'success': False,
                 'error': str(e),
                 'type': type(e).__name__
-            }), 500
+            })
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            return response, 500
     
     # Run Flask app if executed directly
     if __name__ == '__main__':
