@@ -105,11 +105,11 @@ def process_pipeline_step(step_id: int, method_id: str, image: np.ndarray, previ
             if not TRANSFORMERS_AVAILABLE:
                 raise ImportError("Color Separation transformer not available")
             
-            separator = ColorSeparator()
-            if method_id == 'hsv':
-                trace, grid_mask = separator.separate_hsv(image)
-            else:  # default: lab
-                trace, grid_mask = separator.separate_lab(image)
+            separator = ColorSeparator(method=method_id if method_id in ['lab', 'hsv'] else 'lab')
+            separation_result = separator.separate(image)
+            trace_image = separation_result.get('trace_image')
+            grid_mask = separation_result.get('grid_mask')
+            trace = trace_image
             
             result['metrics'] = {
                 'separation_quality': 0.85,  # TODO: Calculate actual metric
@@ -1159,21 +1159,45 @@ if FLASK_AVAILABLE:
                     
                     # Color separation
                     if options.get('color_separation', False):
-                        separator = ColorSeparator()
+                        separator = ColorSeparator(method=options.get('color_method', 'lab'))
                         method = options.get('color_method', 'lab')
-                        if method == 'hsv':
-                            trace, grid_mask = separator.separate_hsv(image)
+                        separation_result = separator.separate(image)
+                        
+                        trace_image = separation_result.get('trace_image')
+                        grid_image = separation_result.get('grid_image')
+                        grid_mask = separation_result.get('grid_mask')
+                        
+                        # Convert to numpy arrays for pixel counting
+                        if grid_mask is not None:
+                            if isinstance(grid_mask, np.ndarray):
+                                grid_mask_array = grid_mask
+                            else:
+                                grid_mask_array = None
                         else:
-                            trace, grid_mask = separator.separate_lab(image)
+                            grid_mask_array = None
+                        
+                        # Trace mask is inverse of grid mask, or use trace_image threshold
+                        if trace_image is not None and isinstance(trace_image, np.ndarray):
+                            # For trace pixels, use threshold on trace_image (darker = signal)
+                            _, trace_mask_array = cv2.threshold(trace_image, 127, 255, cv2.THRESH_BINARY_INV)
+                        elif grid_mask_array is not None:
+                            # Inverse of grid mask
+                            trace_mask_array = (grid_mask_array == 0).astype(np.uint8) * 255
+                        else:
+                            trace_mask_array = None
                         
                         result['steps']['color_separation'] = {
                             'method': method,
-                            'trace_pixels': int(np.sum(trace > 0)) if trace is not None else 0,
-                            'grid_pixels': int(np.sum(grid_mask > 0)) if grid_mask is not None else 0
+                            'trace_pixels': int(np.sum(trace_mask_array > 0)) if trace_mask_array is not None else 0,
+                            'grid_pixels': int(np.sum(grid_mask_array > 0)) if grid_mask_array is not None else 0
                         }
                         
-                        if trace is not None:
-                            image = trace
+                        if trace_image is not None:
+                            # Use trace image (grayscale L-channel)
+                            if len(trace_image.shape) == 2:
+                                image = cv2.cvtColor(trace_image, cv2.COLOR_GRAY2BGR)
+                            else:
+                                image = trace_image
                     
                     # Grid detection
                     if options.get('grid_detection', False):
@@ -1359,21 +1383,45 @@ if FLASK_AVAILABLE:
                     
                     # Color separation
                     if options.get('color_separation', False):
-                        separator = ColorSeparator()
+                        separator = ColorSeparator(method=options.get('color_method', 'lab'))
                         method = options.get('color_method', 'lab')
-                        if method == 'hsv':
-                            trace, grid_mask = separator.separate_hsv(image)
+                        separation_result = separator.separate(image)
+                        
+                        trace_image = separation_result.get('trace_image')
+                        grid_image = separation_result.get('grid_image')
+                        grid_mask = separation_result.get('grid_mask')
+                        
+                        # Convert to numpy arrays for pixel counting
+                        if grid_mask is not None:
+                            if isinstance(grid_mask, np.ndarray):
+                                grid_mask_array = grid_mask
+                            else:
+                                grid_mask_array = None
                         else:
-                            trace, grid_mask = separator.separate_lab(image)
+                            grid_mask_array = None
+                        
+                        # Trace mask is inverse of grid mask, or use trace_image threshold
+                        if trace_image is not None and isinstance(trace_image, np.ndarray):
+                            # For trace pixels, use threshold on trace_image (darker = signal)
+                            _, trace_mask_array = cv2.threshold(trace_image, 127, 255, cv2.THRESH_BINARY_INV)
+                        elif grid_mask_array is not None:
+                            # Inverse of grid mask
+                            trace_mask_array = (grid_mask_array == 0).astype(np.uint8) * 255
+                        else:
+                            trace_mask_array = None
                         
                         result['steps']['color_separation'] = {
                             'method': method,
-                            'trace_pixels': int(np.sum(trace > 0)) if trace is not None else 0,
-                            'grid_pixels': int(np.sum(grid_mask > 0)) if grid_mask is not None else 0
+                            'trace_pixels': int(np.sum(trace_mask_array > 0)) if trace_mask_array is not None else 0,
+                            'grid_pixels': int(np.sum(grid_mask_array > 0)) if grid_mask_array is not None else 0
                         }
                         
-                        if trace is not None:
-                            image = trace
+                        if trace_image is not None:
+                            # Use trace image (grayscale L-channel)
+                            if len(trace_image.shape) == 2:
+                                image = cv2.cvtColor(trace_image, cv2.COLOR_GRAY2BGR)
+                            else:
+                                image = trace_image
                     
                     # Grid detection
                     if options.get('grid_detection', False):
@@ -1534,8 +1582,9 @@ if FLASK_AVAILABLE:
                 
                 # Red grid analysis (if red/black/white)
                 if type_result['type'] == 'red_black_white' and options.get('color_separation', False):
-                    separator = ColorSeparator()
-                    _, red_grid = separator.separate_lab(image)
+                    separator = ColorSeparator(method='lab')
+                    separation_result = separator.separate(image)
+                    red_grid = separation_result.get('grid_image')
                     if red_grid is not None:
                         grid_result = analyzer.analyze_red_grid(red_grid)
                         result['analysis']['red_grid'] = grid_result
@@ -1556,21 +1605,37 @@ if FLASK_AVAILABLE:
             # Color separation
             processed_image = image.copy()
             if options.get('color_separation', False):
-                separator = ColorSeparator()
+                separator = ColorSeparator(method=options.get('color_method', 'lab'))
                 method = options.get('color_method', 'lab')
-                if method == 'hsv':
-                    trace, grid_mask = separator.separate_hsv(image)
+                separation_result = separator.separate(image)
+                
+                trace_image = separation_result.get('trace_image')
+                grid_mask = separation_result.get('grid_mask')
+                
+                # Convert to numpy arrays for pixel counting
+                if grid_mask is not None:
+                    grid_mask_array = grid_mask.astype(np.uint8) * 255 if isinstance(grid_mask, np.ndarray) else None
                 else:
-                    trace, grid_mask = separator.separate_lab(image)
+                    grid_mask_array = None
+                
+                trace_mask = separation_result.get('trace_mask')
+                if trace_mask is not None:
+                    trace_mask_array = trace_mask.astype(np.uint8) * 255 if isinstance(trace_mask, np.ndarray) else None
+                else:
+                    trace_mask_array = None
                 
                 result['steps']['color_separation'] = {
                     'method': method,
-                    'trace_pixels': int(np.sum(trace > 0)) if trace is not None else 0,
-                    'grid_pixels': int(np.sum(grid_mask > 0)) if grid_mask is not None else 0
+                    'trace_pixels': int(np.sum(trace_mask_array > 0)) if trace_mask_array is not None else 0,
+                    'grid_pixels': int(np.sum(grid_mask_array > 0)) if grid_mask_array is not None else 0
                 }
                 
-                if trace is not None:
-                    processed_image = trace
+                if trace_image is not None:
+                    # Use trace image (grayscale L-channel)
+                    if len(trace_image.shape) == 2:
+                        processed_image = cv2.cvtColor(trace_image, cv2.COLOR_GRAY2BGR)
+                    else:
+                        processed_image = trace_image
             
             # Grid detection
             if options.get('grid_detection', False):
