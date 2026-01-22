@@ -33,6 +33,11 @@ if ($galleryContent -match "const APP_VERSION = '(\d+)\.(\d+)\.(\d+)'") {
     exit 1
 }
 
+# Auto-increment patch version by default (unless specified)
+if ($VersionBump -eq "patch" -and $PSBoundParameters.ContainsKey('VersionBump') -eq $false) {
+    # Version will be incremented in the switch statement below
+}
+
 Write-Host "Current version: $currentVersion" -ForegroundColor Yellow
 
 # Calculate new version

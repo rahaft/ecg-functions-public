@@ -154,8 +154,8 @@
         signInAnonymously(auth).catch(console.error);
         
         // Version info
-        const APP_VERSION = '2.3.4';
-        const BUILD_TIMESTAMP = '2026.01.21.2253';
+        const APP_VERSION = '2.3.5';
+        const BUILD_TIMESTAMP = '2026.01.22.0055';
         const BUILD_DATE = new Date();
         
         // Python service URL (Cloud Run)
@@ -176,8 +176,13 @@
         let images = [];
         let allGroups = [];
         let displayedGroups = 0;
-        const GROUPS_PER_PAGE = 3;  // Show 3 groups at a time
-        const IMAGES_PER_PAGE = 30; // Or 30 images total
+        const IMAGES_PER_SET = 9;  // One set = 9 images
+        const SETS_PER_LOAD = 1;   // Initial load: 1 set (9 images)
+        const SETS_PER_LOAD_MORE = 2; // Load More: 2 sets (18 images)
+        
+        // Processing state
+        let processingGroups = new Set();
+        let processedImages = new Map(); // groupKey -> {images: [], subImages: {}}
         
         // Load images from GCS buckets via manifest
         async function loadImages() {
@@ -299,31 +304,21 @@
             }
         }
         
-        // Render groups with pagination
+        // Render groups with pagination (by sets of 9 images)
         function renderGroups() {
             const galleryGrid = document.getElementById('gallery-grid');
             let imagesDisplayed = 0;
-            const maxImages = IMAGES_PER_PAGE;
+            const maxImages = displayedGroups === 0 ? 
+                (SETS_PER_LOAD * IMAGES_PER_SET) : 
+                (SETS_PER_LOAD_MORE * IMAGES_PER_SET);
             
-            // Calculate how many groups to show
-            let groupsToShow = GROUPS_PER_PAGE;
-            let totalImagesInGroups = 0;
-            
-            for (let i = displayedGroups; i < Math.min(displayedGroups + GROUPS_PER_PAGE, allGroups.length); i++) {
-                totalImagesInGroups += allGroups[i].images.length;
-                if (totalImagesInGroups > maxImages) {
-                    groupsToShow = i - displayedGroups;
-                    break;
-                }
-            }
-            
-            // Render groups
-            for (let i = displayedGroups; i < displayedGroups + groupsToShow && i < allGroups.length; i++) {
+            // Render groups until we hit the image limit
+            for (let i = displayedGroups; i < allGroups.length; i++) {
                 const group = allGroups[i];
                 
                 // Check if we've hit image limit
                 if (imagesDisplayed + group.images.length > maxImages) {
-                    // Show partial group
+                    // Show partial group if there's room
                     const remainingImages = maxImages - imagesDisplayed;
                     if (remainingImages > 0) {
                         renderGroup(group, remainingImages);
@@ -359,13 +354,27 @@
             
             const groupLabel = group.folder || group.key;
             const groupType = group.is_train ? '📚 Train' : group.is_test ? '🧪 Test' : '📁';
+            const isProcessing = processingGroups.has(group.key);
+            const isProcessed = processedImages.has(group.key);
+            
             groupHeader.innerHTML = `
-                <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">
-                    ${groupType} ${groupLabel}
-                </h2>
-                <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
-                    ${imagesToShow.length}${maxImages && imagesToShow.length < group.images.length ? ` of ${group.images.length}` : ''} image(s) in this group
-                </p>
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">
+                            ${groupType} ${groupLabel}
+                        </h2>
+                        <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
+                            ${imagesToShow.length}${maxImages && imagesToShow.length < group.images.length ? ` of ${group.images.length}` : ''} image(s) in this group
+                        </p>
+                    </div>
+                    <button class="process-group-btn" 
+                            data-group-key="${group.key}"
+                            onclick="processGroup('${group.key}')"
+                            ${isProcessing ? 'disabled' : ''}
+                            style="padding: 0.5rem 1rem; background: ${isProcessing ? '#ccc' : 'var(--primary-color)'}; color: white; border: none; border-radius: 0.375rem; cursor: ${isProcessing ? 'not-allowed' : 'pointer'}; font-size: 0.875rem;">
+                        ${isProcessing ? '⏳ Processing...' : isProcessed ? '🔄 Reprocess' : '⚡ Process'}
+                    </button>
+                </div>
             `;
             galleryGrid.appendChild(groupHeader);
             
@@ -374,15 +383,46 @@
                 const item = document.createElement('div');
                 item.className = 'gallery-item';
                 item.dataset.groupKey = group.key;
+                item.dataset.imageName = img.name;
+                
+                // Check if this is the base image (-0001)
+                const isBaseImage = img.name.includes('-0001');
+                
+                // Get sub-images if processed
+                const processed = processedImages.get(group.key);
+                const subImages = processed?.subImages?.[img.name] || [];
+                
+                let subImagesHtml = '';
+                if (subImages.length > 0 && !isBaseImage) {
+                    subImagesHtml = `
+                        <div class="sub-images" style="display: flex; gap: 0.5rem; padding: 0.5rem; background: #f5f5f5; flex-wrap: wrap;">
+                            ${subImages.map(sub => `
+                                <img src="${sub.url}" alt="${sub.name}" 
+                                     style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px; cursor: pointer;"
+                                     onclick="event.stopPropagation(); window.open('${sub.url}', '_blank')"
+                                     title="${sub.name}">
+                            `).join('')}
+                        </div>
+                    `;
+                }
+                
                 item.innerHTML = `
                     <img src="${img.url}" alt="${img.name}" loading="lazy" 
                          onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'%3E%3Ctext x=\\'50%25\\' y=\\'50%25\\' text-anchor=\\'middle\\'%3EFailed to load%3C/text%3E%3C/svg%3E';">
                     <div class="gallery-item-info">
                         <h3>${img.name}</h3>
                         <p style="font-size: 0.7rem; color: #888;">${img.bucket || 'unknown'}</p>
+                        ${isBaseImage ? '<span style="color: green; font-size: 0.7rem;">Base Image</span>' : ''}
                     </div>
+                    ${subImagesHtml}
                 `;
-                item.onclick = () => window.open(img.url, '_blank');
+                item.onclick = () => {
+                    if (processed && processed.images.length > 0) {
+                        openComparisonModal(group.key, img.name);
+                    } else {
+                        window.open(img.url, '_blank');
+                    }
+                };
                 galleryGrid.appendChild(item);
             });
         }
@@ -597,6 +637,236 @@
             if (buildEl) buildEl.textContent = BUILD_TIMESTAMP;
             if (dateEl) dateEl.textContent = BUILD_DATE.toLocaleString();
         });
+        
+        // Process group of images
+        window.processGroup = async function(groupKey) {
+            const group = allGroups.find(g => g.key === groupKey);
+            if (!group) {
+                console.error('Group not found:', groupKey);
+                return;
+            }
+            
+            // Mark as processing
+            processingGroups.add(groupKey);
+            updateProcessButton(groupKey, true);
+            
+            try {
+                // Get image paths from group
+                const imagePaths = group.images.map(img => img.path || img.name);
+                const bucketName = group.images[0]?.bucket || GCS_BUCKETS[0];
+                
+                console.log(`Processing group ${groupKey} with ${imagePaths.length} images`);
+                
+                // Call process-gcs-batch endpoint
+                const response = await window.processGCSBatch(imagePaths, bucketName, {
+                    edge_detection: true,
+                    color_separation: true,
+                    grid_detection: true,
+                    quality_check: true,
+                    crop_to_content: false,
+                    color_method: 'lab'
+                });
+                
+                if (response.success) {
+                    // Store processed results
+                    processedImages.set(groupKey, {
+                        images: response.results || [],
+                        subImages: {}
+                    });
+                    
+                    // Update UI
+                    updateProcessButton(groupKey, false, true);
+                    console.log(`✓ Processed group ${groupKey}`);
+                } else {
+                    throw new Error(response.error || 'Processing failed');
+                }
+            } catch (error) {
+                console.error('Error processing group:', error);
+                alert(`Failed to process group: ${error.message}`);
+                updateProcessButton(groupKey, false, false);
+            } finally {
+                processingGroups.delete(groupKey);
+            }
+        };
+        
+        // Update process button state
+        function updateProcessButton(groupKey, isProcessing, isProcessed = false) {
+            const btn = document.querySelector(`.process-group-btn[data-group-key="${groupKey}"]`);
+            if (btn) {
+                btn.disabled = isProcessing;
+                btn.textContent = isProcessing ? '⏳ Processing...' : (isProcessed ? '🔄 Reprocess' : '⚡ Process');
+                btn.style.background = isProcessing ? '#ccc' : 'var(--primary-color)';
+            }
+        }
+        
+        // Comparison modal state
+        let currentComparisonGroup = null;
+        let currentComparisonImages = [];
+        let currentComparisonIndex = 0;
+        let currentComparisonMetrics = {};
+        
+        // Open comparison modal
+        window.openComparisonModal = function(groupKey, imageName) {
+            const processed = processedImages.get(groupKey);
+            if (!processed || !processed.images || processed.images.length === 0) {
+                alert('No processed images available. Please process the group first.');
+                return;
+            }
+            
+            currentComparisonGroup = groupKey;
+            currentComparisonImages = processed.images;
+            currentComparisonIndex = 0;
+            
+            const modal = document.getElementById('comparison-modal');
+            modal.style.display = 'block';
+            
+            // Find image index
+            const imageIndex = currentComparisonImages.findIndex(img => 
+                img.name === imageName || img.original_name === imageName
+            );
+            if (imageIndex >= 0) {
+                currentComparisonIndex = imageIndex;
+            }
+            
+            renderComparison();
+        };
+        
+        // Close comparison modal
+        window.closeComparisonModal = function() {
+            const modal = document.getElementById('comparison-modal');
+            modal.style.display = 'none';
+            currentComparisonGroup = null;
+            currentComparisonImages = [];
+            currentComparisonIndex = 0;
+        };
+        
+        // Navigate images in comparison modal
+        window.navigateImage = function(direction) {
+            if (currentComparisonImages.length === 0) return;
+            
+            currentComparisonIndex += direction;
+            if (currentComparisonIndex < 0) {
+                currentComparisonIndex = currentComparisonImages.length - 1;
+            } else if (currentComparisonIndex >= currentComparisonImages.length) {
+                currentComparisonIndex = 0;
+            }
+            
+            renderComparison();
+        };
+        
+        // Render comparison view
+        function renderComparison() {
+            if (currentComparisonImages.length === 0) return;
+            
+            const current = currentComparisonImages[currentComparisonIndex];
+            
+            // Update images
+            const originalImg = document.getElementById('comparison-original');
+            const processedImg = document.getElementById('comparison-processed');
+            const originalName = document.getElementById('comparison-original-name');
+            const processedName = document.getElementById('comparison-processed-name');
+            
+            if (originalImg && current.original_url) {
+                originalImg.src = current.original_url;
+            }
+            if (processedImg && current.processed_url) {
+                processedImg.src = current.processed_url;
+            }
+            if (originalName) {
+                originalName.textContent = current.original_name || current.name || 'Original';
+            }
+            if (processedName) {
+                processedName.textContent = current.processed_name || current.name || 'Processed';
+            }
+            
+            // Update metrics
+            if (current.metrics) {
+                const snrEl = document.getElementById('metric-snr');
+                const typeEl = document.getElementById('metric-type');
+                const contrastEl = document.getElementById('metric-contrast');
+                const smudgesEl = document.getElementById('metric-smudges');
+                
+                if (snrEl && current.metrics.snr_db !== undefined) {
+                    snrEl.textContent = current.metrics.snr_db.toFixed(2);
+                }
+                if (typeEl && current.metrics.image_type) {
+                    typeEl.textContent = current.metrics.image_type;
+                }
+                if (contrastEl && current.metrics.contrast !== undefined) {
+                    contrastEl.textContent = current.metrics.contrast.toFixed(2);
+                }
+                if (smudgesEl && current.metrics.smudges) {
+                    smudgesEl.textContent = current.metrics.smudges.qualitative || 
+                                          `${current.metrics.smudges.smudge_count} smudges`;
+                }
+            }
+            
+            // Update thumbnails
+            renderThumbnails();
+        }
+        
+        // Render thumbnail strip
+        function renderThumbnails() {
+            const strip = document.getElementById('thumbnail-strip');
+            if (!strip) return;
+            
+            strip.innerHTML = currentComparisonImages.map((img, index) => {
+                const isActive = index === currentComparisonIndex;
+                const thumbUrl = img.thumbnail_url || img.processed_url || img.original_url || img.url;
+                return `
+                    <div class="thumbnail-item ${isActive ? 'active' : ''}" 
+                         onclick="navigateToImage(${index})">
+                        <img src="${thumbUrl}" alt="${img.name}">
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Navigate to specific image
+        window.navigateToImage = function(index) {
+            if (index >= 0 && index < currentComparisonImages.length) {
+                currentComparisonIndex = index;
+                renderComparison();
+            }
+        };
+        
+        // Update overlays
+        window.updateOverlays = function() {
+            const showEdges = document.getElementById('toggle-edges')?.checked || false;
+            const showSmudges = document.getElementById('toggle-smudges')?.checked || false;
+            const showGrid = document.getElementById('toggle-grid')?.checked || false;
+            
+            // TODO: Implement overlay rendering on images
+            console.log('Overlays:', { showEdges, showSmudges, showGrid });
+        };
+        
+        // Choose random group
+        window.chooseRandomGroup = function() {
+            if (allGroups.length === 0) {
+                alert('No groups available');
+                return;
+            }
+            
+            const randomIndex = Math.floor(Math.random() * allGroups.length);
+            const randomGroup = allGroups[randomIndex];
+            
+            // Scroll to group
+            const groupHeader = document.querySelector(`.gallery-group-header`);
+            if (groupHeader) {
+                groupHeader.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            
+            // Highlight it briefly
+            const btn = document.querySelector(`.process-group-btn[data-group-key="${randomGroup.key}"]`);
+            if (btn) {
+                btn.style.background = '#ff6b6b';
+                setTimeout(() => {
+                    btn.style.background = 'var(--primary-color)';
+                }, 2000);
+            }
+            
+            console.log('Selected random group:', randomGroup.key);
+        };
     </script>
     
     <!-- WebSocket Client (optional, for future use) -->
@@ -606,8 +876,12 @@
     <div class="gallery-container">
         <header>
             <h1>ECG Image Gallery</h1>
-            <div style="margin-top: 10px;">
+            <div style="margin-top: 10px; display: flex; gap: 1rem; align-items: center;">
                 <a href="/index.html" style="color: var(--primary-color); text-decoration: underline;">← Back to Upload</a>
+                <button id="choose-random-btn" onclick="chooseRandomGroup()" 
+                        style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;">
+                    🎲 Choose Random Set
+                </button>
             </div>
         </header>
         
@@ -629,5 +903,216 @@
             <button class="version-copy-btn" id="version-copy-btn" onclick="copyVersionInfo()">📋 Copy</button>
         </footer>
     </div>
+    
+    <!-- Comparison Modal -->
+    <div id="comparison-modal" class="comparison-modal" style="display: none;">
+        <div class="comparison-modal-content">
+            <div class="comparison-header">
+                <h2 id="comparison-title">Image Comparison</h2>
+                <button class="modal-close" onclick="closeComparisonModal()">&times;</button>
+            </div>
+            
+            <!-- Thumbnail Strip -->
+            <div class="thumbnail-strip" id="thumbnail-strip"></div>
+            
+            <!-- Main Comparison Area -->
+            <div class="comparison-main">
+                <!-- Navigation Arrows -->
+                <button class="nav-arrow nav-left" onclick="navigateImage(-1)">←</button>
+                <button class="nav-arrow nav-right" onclick="navigateImage(1)">→</button>
+                
+                <!-- Image Display -->
+                <div class="comparison-images">
+                    <div class="image-panel">
+                        <h3>Original</h3>
+                        <img id="comparison-original" src="" alt="Original">
+                        <p id="comparison-original-name" class="image-name"></p>
+                    </div>
+                    <div class="image-panel">
+                        <h3>Processed</h3>
+                        <img id="comparison-processed" src="" alt="Processed">
+                        <p id="comparison-processed-name" class="image-name"></p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Metrics Panel -->
+            <div class="metrics-panel">
+                <h3>Metrics</h3>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <label>SNR:</label>
+                        <span id="metric-snr">--</span> dB
+                    </div>
+                    <div class="metric-item">
+                        <label>Image Type:</label>
+                        <span id="metric-type">--</span>
+                    </div>
+                    <div class="metric-item">
+                        <label>Contrast:</label>
+                        <span id="metric-contrast">--</span>
+                    </div>
+                    <div class="metric-item">
+                        <label>Smudges:</label>
+                        <span id="metric-smudges">--</span>
+                    </div>
+                </div>
+                
+                <!-- Toggle Overlays -->
+                <div class="overlay-toggles">
+                    <label><input type="checkbox" id="toggle-edges" onchange="updateOverlays()"> Show Edges</label>
+                    <label><input type="checkbox" id="toggle-smudges" onchange="updateOverlays()"> Show Smudges</label>
+                    <label><input type="checkbox" id="toggle-grid" onchange="updateOverlays()"> Show Grid</label>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        .comparison-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        
+        .comparison-modal-content {
+            max-width: 1400px;
+            margin: 2rem auto;
+            background: white;
+            border-radius: 0.5rem;
+            padding: 2rem;
+            position: relative;
+        }
+        
+        .comparison-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 2rem;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .thumbnail-strip {
+            display: flex;
+            gap: 0.5rem;
+            padding: 1rem;
+            background: #f5f5f5;
+            border-radius: 0.5rem;
+            margin-bottom: 1.5rem;
+            overflow-x: auto;
+        }
+        
+        .thumbnail-item {
+            min-width: 80px;
+            height: 80px;
+            border: 2px solid transparent;
+            border-radius: 4px;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        
+        .thumbnail-item.active {
+            border-color: var(--primary-color);
+        }
+        
+        .thumbnail-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .comparison-main {
+            position: relative;
+            margin-bottom: 2rem;
+        }
+        
+        .nav-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            cursor: pointer;
+            z-index: 10;
+        }
+        
+        .nav-left {
+            left: -25px;
+        }
+        
+        .nav-right {
+            right: -25px;
+        }
+        
+        .comparison-images {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+        
+        .image-panel {
+            text-align: center;
+        }
+        
+        .image-panel img {
+            max-width: 100%;
+            max-height: 500px;
+            border: 1px solid #ddd;
+            border-radius: 0.5rem;
+        }
+        
+        .image-name {
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+            color: #666;
+        }
+        
+        .metrics-panel {
+            border-top: 1px solid #ddd;
+            padding-top: 1.5rem;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .metric-item {
+            padding: 0.75rem;
+            background: #f5f5f5;
+            border-radius: 0.375rem;
+        }
+        
+        .overlay-toggles {
+            display: flex;
+            gap: 1.5rem;
+        }
+        
+        .overlay-toggles label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+    </style>
 </body>
 </html>

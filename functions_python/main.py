@@ -1102,6 +1102,7 @@ if FLASK_AVAILABLE:
             from transformers.color_separation import ColorSeparator
             from transformers.quality_gates import QualityGates
             from transformers.multi_scale_grid_detector import MultiScaleGridDetector
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             data = request.json
             images_base64 = data.get('images', [])
@@ -1113,9 +1114,8 @@ if FLASK_AVAILABLE:
             if len(images_base64) > 10:
                 return jsonify({'error': 'Maximum 10 images per batch'}), 400
             
-            results = []
-            
-            for i, image_base64 in enumerate(images_base64):
+            def process_single_image(i, image_base64):
+                """Process a single image - designed for parallel execution"""
                 try:
                     # Decode image
                     image_bytes = base64.b64decode(image_base64)
@@ -1123,12 +1123,11 @@ if FLASK_AVAILABLE:
                     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     
                     if image is None:
-                        results.append({
+                        return {
                             'index': i,
                             'success': False,
                             'error': 'Failed to decode image'
-                        })
-                        continue
+                        }
                     
                     result = {
                         'index': i,
@@ -1191,20 +1190,391 @@ if FLASK_AVAILABLE:
                             'warnings': quality_result.get('warnings', [])
                         }
                     
-                    results.append(result)
+                    return result
                     
                 except Exception as e:
-                    results.append({
+                    return {
                         'index': i,
                         'success': False,
                         'error': str(e)
-                    })
+                    }
+            
+            # Process all images in parallel (up to 9 workers for 9 images)
+            results = []
+            max_workers = min(len(images_base64), 9)  # Process up to 9 images simultaneously
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks
+                future_to_index = {
+                    executor.submit(process_single_image, i, img): i 
+                    for i, img in enumerate(images_base64)
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_index):
+                    result = future.result()
+                    results.append(result)
+            
+            # Sort by index to maintain original order
+            results.sort(key=lambda x: x['index'])
             
             return jsonify({
                 'success': True,
                 'count': len(results),
+                'parallel': True,
+                'workers_used': max_workers,
                 'results': results
             })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'type': type(e).__name__
+            }), 500
+    
+    @app.route('/process-gcs-batch', methods=['POST'])
+    def process_gcs_batch_endpoint():
+        """
+        Process multiple images from GCS buckets in batch.
+        
+        Expected JSON:
+        {
+            "image_paths": ["path/to/image1.png", "path/to/image2.png", ...],
+            "bucket": "bucket-name",
+            "options": {
+                "edge_detection": true,
+                "color_separation": true,
+                "grid_detection": true,
+                "quality_check": true,
+                "crop_to_content": false,
+                "color_method": "lab"
+            }
+        }
+        """
+        try:
+            from google.cloud import storage
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            if not TRANSFORMERS_AVAILABLE:
+                return jsonify({'error': 'Transformers not available'}), 500
+            
+            from transformers.edge_detector import detect_edges, crop_to_content
+            from transformers.color_separation import ColorSeparator
+            from transformers.quality_gates import QualityGates
+            from transformers.multi_scale_grid_detector import MultiScaleGridDetector
+            
+            data = request.json
+            image_paths = data.get('image_paths', [])
+            bucket_name = data.get('bucket')
+            options = data.get('options', {})
+            
+            if not image_paths:
+                return jsonify({'error': 'image_paths array required'}), 400
+            
+            if not bucket_name:
+                return jsonify({'error': 'bucket name required'}), 400
+            
+            if len(image_paths) > 20:
+                return jsonify({'error': 'Maximum 20 images per batch'}), 400
+            
+            # Initialize GCS client
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(bucket_name)
+            
+            def download_and_process_image(i, image_path):
+                """Download image from GCS and process it"""
+                try:
+                    # Download from GCS
+                    blob = bucket.blob(image_path)
+                    if not blob.exists():
+                        return {
+                            'index': i,
+                            'success': False,
+                            'error': f'Image not found: {image_path}',
+                            'path': image_path
+                        }
+                    
+                    image_bytes = blob.download_as_bytes()
+                    nparr = np.frombuffer(image_bytes, np.uint8)
+                    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    
+                    if image is None:
+                        return {
+                            'index': i,
+                            'success': False,
+                            'error': 'Failed to decode image',
+                            'path': image_path
+                        }
+                    
+                    result = {
+                        'index': i,
+                        'success': True,
+                        'path': image_path,
+                        'name': image_path.split('/')[-1],
+                        'original_url': f'https://storage.googleapis.com/{bucket_name}/{image_path}',
+                        'steps': {},
+                        'metrics': {}
+                    }
+                    
+                    # Edge detection
+                    if options.get('edge_detection', False):
+                        edge_result = detect_edges(image, method='canny')
+                        result['steps']['edge_detection'] = {
+                            'bounding_box': {
+                                'x': int(edge_result['bounding_box'][0]),
+                                'y': int(edge_result['bounding_box'][1]),
+                                'width': int(edge_result['bounding_box'][2]),
+                                'height': int(edge_result['bounding_box'][3])
+                            },
+                            'edge_pixels': int(edge_result['edge_pixels'])
+                        }
+                        
+                        if options.get('crop_to_content', False):
+                            image = crop_to_content(image, padding=10)
+                    
+                    # Color separation
+                    if options.get('color_separation', False):
+                        separator = ColorSeparator()
+                        method = options.get('color_method', 'lab')
+                        if method == 'hsv':
+                            trace, grid_mask = separator.separate_hsv(image)
+                        else:
+                            trace, grid_mask = separator.separate_lab(image)
+                        
+                        result['steps']['color_separation'] = {
+                            'method': method,
+                            'trace_pixels': int(np.sum(trace > 0)) if trace is not None else 0,
+                            'grid_pixels': int(np.sum(grid_mask > 0)) if grid_mask is not None else 0
+                        }
+                        
+                        if trace is not None:
+                            image = trace
+                    
+                    # Grid detection
+                    if options.get('grid_detection', False):
+                        detector = MultiScaleGridDetector()
+                        grid_result = detector.detect(image)
+                        result['steps']['grid_detection'] = {
+                            'fine_lines': int(grid_result.get('fine_lines', 0)),
+                            'bold_lines': int(grid_result.get('bold_lines', 0)),
+                            'quality_score': float(grid_result.get('quality_score', 0))
+                        }
+                    
+                    # Quality check
+                    if options.get('quality_check', False):
+                        gates = QualityGates()
+                        quality_result = gates.check_all(image)
+                        result['metrics'] = {
+                            'blur_score': float(quality_result['blur']['score']),
+                            'dpi': float(quality_result['resolution'].get('estimated_dpi', 0)),
+                            'contrast_std': float(quality_result['contrast']['std']),
+                            'grid_lines_count': int(quality_result['grid_detectability']['detected_lines'])
+                        }
+                    
+                    return result
+                    
+                except Exception as e:
+                    return {
+                        'index': i,
+                        'success': False,
+                        'error': str(e),
+                        'path': image_path,
+                        'type': type(e).__name__
+                    }
+            
+            # Process all images in parallel
+            results = []
+            max_workers = min(len(image_paths), 10)
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_index = {
+                    executor.submit(download_and_process_image, i, path): i 
+                    for i, path in enumerate(image_paths)
+                }
+                
+                for future in as_completed(future_to_index):
+                    result = future.result()
+                    results.append(result)
+            
+            # Sort by index
+            results.sort(key=lambda x: x['index'])
+            
+            return jsonify({
+                'success': True,
+                'count': len(results),
+                'bucket': bucket_name,
+                'results': results
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'type': type(e).__name__
+            }), 500
+    
+    @app.route('/process-comprehensive', methods=['POST'])
+    def process_comprehensive_endpoint():
+        """
+        Comprehensive image processing with SNR calculation and full analysis.
+        
+        Expected JSON:
+        {
+            "image": "base64_encoded_image",
+            "base_image": "base64_encoded_base_image" (optional, for SNR),
+            "options": {
+                "edge_detection": true,
+                "color_separation": true,
+                "grid_detection": true,
+                "quality_check": true,
+                "calculate_snr": true,
+                "analyze_image": true
+            }
+        }
+        """
+        try:
+            if not TRANSFORMERS_AVAILABLE:
+                return jsonify({'error': 'Transformers not available'}), 500
+            
+            # Import analyzers
+            try:
+                from transformers.snr_calculator import SNRCalculator
+                from transformers.image_analyzer import ImageAnalyzer
+                SNR_AVAILABLE = True
+            except ImportError:
+                SNR_AVAILABLE = False
+                print("Warning: SNR calculator or image analyzer not available")
+            
+            from transformers.edge_detector import detect_edges
+            from transformers.color_separation import ColorSeparator
+            from transformers.quality_gates import QualityGates
+            from transformers.multi_scale_grid_detector import MultiScaleGridDetector
+            
+            data = request.json
+            image_base64 = data.get('image')
+            base_image_base64 = data.get('base_image')
+            options = data.get('options', {})
+            
+            if not image_base64:
+                return jsonify({'error': 'Image data required'}), 400
+            
+            # Decode main image
+            image_bytes = base64.b64decode(image_base64)
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if image is None:
+                return jsonify({'error': 'Failed to decode image'}), 400
+            
+            # Decode base image if provided
+            base_image = None
+            if base_image_base64:
+                base_bytes = base64.b64decode(base_image_base64)
+                base_nparr = np.frombuffer(base_bytes, np.uint8)
+                base_image = cv2.imdecode(base_nparr, cv2.IMREAD_COLOR)
+            
+            result = {
+                'success': True,
+                'steps': {},
+                'metrics': {},
+                'analysis': {}
+            }
+            
+            # Image analysis
+            if options.get('analyze_image', True) and SNR_AVAILABLE:
+                analyzer = ImageAnalyzer()
+                
+                # Image type detection
+                type_result = analyzer.detect_image_type(image)
+                result['analysis']['image_type'] = type_result
+                
+                # Contrast analysis
+                contrast_result = analyzer.analyze_contrast(image)
+                result['analysis']['contrast'] = contrast_result
+                
+                # Smudge detection
+                smudge_result = analyzer.detect_smudges(image, method='morphological')
+                result['analysis']['smudges'] = smudge_result
+                
+                # Red grid analysis (if red/black/white)
+                if type_result['type'] == 'red_black_white' and options.get('color_separation', False):
+                    separator = ColorSeparator()
+                    _, red_grid = separator.separate_lab(image)
+                    if red_grid is not None:
+                        grid_result = analyzer.analyze_red_grid(red_grid)
+                        result['analysis']['red_grid'] = grid_result
+            
+            # Edge detection
+            if options.get('edge_detection', False):
+                edge_result = detect_edges(image, method='canny')
+                result['steps']['edge_detection'] = {
+                    'bounding_box': {
+                        'x': int(edge_result['bounding_box'][0]),
+                        'y': int(edge_result['bounding_box'][1]),
+                        'width': int(edge_result['bounding_box'][2]),
+                        'height': int(edge_result['bounding_box'][3])
+                    },
+                    'edge_pixels': int(edge_result['edge_pixels'])
+                }
+            
+            # Color separation
+            processed_image = image.copy()
+            if options.get('color_separation', False):
+                separator = ColorSeparator()
+                method = options.get('color_method', 'lab')
+                if method == 'hsv':
+                    trace, grid_mask = separator.separate_hsv(image)
+                else:
+                    trace, grid_mask = separator.separate_lab(image)
+                
+                result['steps']['color_separation'] = {
+                    'method': method,
+                    'trace_pixels': int(np.sum(trace > 0)) if trace is not None else 0,
+                    'grid_pixels': int(np.sum(grid_mask > 0)) if grid_mask is not None else 0
+                }
+                
+                if trace is not None:
+                    processed_image = trace
+            
+            # Grid detection
+            if options.get('grid_detection', False):
+                detector = MultiScaleGridDetector()
+                grid_result = detector.detect(processed_image)
+                result['steps']['grid_detection'] = {
+                    'fine_lines': int(grid_result.get('fine_lines', 0)),
+                    'bold_lines': int(grid_result.get('bold_lines', 0)),
+                    'quality_score': float(grid_result.get('quality_score', 0))
+                }
+            
+            # Quality check
+            if options.get('quality_check', False):
+                gates = QualityGates()
+                quality_result = gates.check_all(processed_image)
+                result['metrics'] = {
+                    'blur_score': float(quality_result['blur']['score']),
+                    'dpi': float(quality_result['resolution'].get('estimated_dpi', 0)),
+                    'contrast_std': float(quality_result['contrast']['std']),
+                    'grid_lines_count': int(quality_result['grid_detectability']['detected_lines'])
+                }
+            
+            # SNR calculation (if base image provided)
+            if options.get('calculate_snr', False) and base_image is not None and SNR_AVAILABLE:
+                snr_calc = SNRCalculator()
+                snr_result = snr_calc.calculate_snr(base_image, processed_image)
+                result['metrics']['snr'] = {
+                    'snr_db': snr_result['snr_db'],
+                    'signal_power': snr_result['signal_power'],
+                    'noise_power': snr_result['noise_power'],
+                    'snr_linear': snr_result['snr_linear']
+                }
+            
+            # Encode processed image
+            _, buffer = cv2.imencode('.png', processed_image)
+            processed_base64 = base64.b64encode(buffer).decode('utf-8')
+            result['processed_image'] = processed_base64
+            
+            return jsonify(result)
             
         except Exception as e:
             return jsonify({
