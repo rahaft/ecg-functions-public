@@ -1617,35 +1617,71 @@
                 processedUrl = current.processed_url;
             }
             
-            // Update all three panels
-            // Panel 1: Ground Truth (-0001)
-            const groundTruthImg = document.getElementById('comparison-ground-truth');
-            const groundTruthName = document.getElementById('comparison-ground-truth-name');
-            if (groundTruthImg) {
-                groundTruthImg.src = groundTruthUrl || '';
-            }
-            if (groundTruthName) {
-                groundTruthName.textContent = baseImageName || 'Ground Truth';
-            }
-            
-            // Panel 2: Original (unprocessed current image)
+            // Update all three panels in correct order: Original → Ground Truth → Processed
+            // Panel 1: Original (raw input - unprocessed current image)
             const originalImg = document.getElementById('comparison-original');
             const originalNameEl = document.getElementById('comparison-original-name');
             if (originalImg) {
-                originalImg.src = originalUrl;
+                originalImg.src = originalUrl || '';
+                // Auto-apply overlays when image loads
+                originalImg.onload = () => {
+                    const showEdges = document.getElementById('toggle-edges')?.checked || false;
+                    const showGrid = document.getElementById('toggle-grid')?.checked || false;
+                    const showSmudges = document.getElementById('toggle-smudges')?.checked || false;
+                    if (showEdges || showGrid || showSmudges) {
+                        applyOverlaysToImage(originalImg, showEdges, showSmudges, showGrid, 'original');
+                    }
+                };
             }
             if (originalNameEl) {
-                originalNameEl.textContent = originalName;
+                originalNameEl.textContent = originalName || 'Original (Raw Input)';
             }
             
-            // Panel 3: Processed
+            // Panel 2: Ground Truth (reference -0001 image)
+            const groundTruthImg = document.getElementById('comparison-ground-truth');
+            const groundTruthName = document.getElementById('comparison-ground-truth-name');
+            if (groundTruthImg) {
+                groundTruthImg.src = groundTruthUrl || originalUrl || '';
+                // Auto-apply overlays when image loads
+                groundTruthImg.onload = () => {
+                    const showEdges = document.getElementById('toggle-edges')?.checked || false;
+                    const showGrid = document.getElementById('toggle-grid')?.checked || false;
+                    const showSmudges = document.getElementById('toggle-smudges')?.checked || false;
+                    if (showEdges || showGrid || showSmudges) {
+                        applyOverlaysToImage(groundTruthImg, showEdges, showSmudges, showGrid, 'ground-truth');
+                    }
+                };
+            }
+            if (groundTruthName) {
+                groundTruthName.textContent = baseImageName || 'Ground Truth (Reference)';
+            }
+            
+            // Panel 3: Processed (final result)
             const processedImg = document.getElementById('comparison-processed');
             const processedNameEl = document.getElementById('comparison-processed-name');
             if (processedImg) {
-                processedImg.src = processedUrl;
+                // Use processed image if available, otherwise show original
+                if (processedUrl && processedUrl !== originalUrl) {
+                    processedImg.src = processedUrl;
+                } else {
+                    processedImg.src = originalUrl || '';
+                }
+                // Auto-apply overlays when image loads
+                processedImg.onload = () => {
+                    const showEdges = document.getElementById('toggle-edges')?.checked || false;
+                    const showGrid = document.getElementById('toggle-grid')?.checked || false;
+                    const showSmudges = document.getElementById('toggle-smudges')?.checked || false;
+                    if (showEdges || showGrid || showSmudges) {
+                        applyOverlaysToImage(processedImg, showEdges, showSmudges, showGrid, 'processed');
+                    }
+                };
             }
             if (processedNameEl) {
-                processedNameEl.textContent = originalName + ' (Processed)';
+                if (processedUrl && processedUrl !== originalUrl) {
+                    processedNameEl.textContent = originalName + ' (Processed)';
+                } else {
+                    processedNameEl.textContent = originalName + ' (Not Processed Yet)';
+                }
             }
             
             // Update fade comparison images (View 2: Ground Truth vs Processed)
@@ -1695,6 +1731,11 @@
             
             // Update processing stages
             renderProcessingStages(current);
+            
+            // Update processing checklist if step-by-step view is active
+            if (currentViewMode === 'step-by-step') {
+                renderProcessingChecklist(current);
+            }
             
             // Update metrics - check both current.metrics and _raw.metrics
             const metrics = current.metrics || current._raw?.metrics || {};
@@ -1778,6 +1819,14 @@
             const selectedView = document.getElementById(`view-${mode}`);
             if (selectedView) {
                 selectedView.style.display = 'block';
+            }
+            
+            // If switching to step-by-step view, render the checklist
+            if (mode === 'step-by-step') {
+                const current = currentComparisonImages[currentComparisonIndex];
+                if (current) {
+                    renderProcessingChecklist(current);
+                }
             }
             
             // Update button styles
@@ -1895,6 +1944,514 @@
             const stepNext = document.getElementById('step-next');
             if (stepPrev) stepPrev.disabled = stepImages.length <= 1;
             if (stepNext) stepNext.disabled = stepImages.length <= 1;
+        };
+        
+        // Processing steps definition
+        const PROCESSING_STEPS = [
+            { id: 0, name: 'Assumptions', step_id: 0, method_id: 'default', icon: '📋' },
+            { id: 1, name: 'Quality Gates', step_id: 1, method_id: 'default', icon: '✅' },
+            { id: 2, name: 'Color Separation', step_id: 2, method_id: 'lab', icon: '🎨' },
+            { id: 3, name: 'Illumination Normalization', step_id: 3, method_id: 'clahe', icon: '💡' },
+            { id: 4, name: 'Multi-Scale Grid Detection', step_id: 4, method_id: 'default', icon: '📐' },
+            { id: 5, name: 'Smudge Removal', step_id: 5, method_id: 'inpainting', icon: '🧹' },
+            { id: 6, name: 'Rotation Correction', step_id: 6, method_id: 'hough', icon: '🔄' },
+            { id: 7, name: 'FFT Grid Reconstruction', step_id: 7, method_id: 'default', icon: '📊' },
+            { id: 8, name: 'Grid Line Detection', step_id: 8, method_id: 'hough', icon: '📏' },
+            { id: 9, name: 'Grid Spacing Estimation', step_id: 9, method_id: 'default', icon: '📏' },
+            { id: 10, name: 'Affine Transform', step_id: 10, method_id: 'default', icon: '🔀' },
+            { id: 11, name: 'ECG Trace Extraction', step_id: 11, method_id: 'default', icon: '📈' },
+            { id: 12, name: 'Apply Transform to Trace', step_id: 12, method_id: 'default', icon: '➡️' },
+            { id: 13, name: 'Skeletonize', step_id: 13, method_id: 'default', icon: '🦴' },
+            { id: 14, name: 'Trace to Signal', step_id: 14, method_id: 'default', icon: '📉' },
+            { id: 15, name: 'Post-Process Signal', step_id: 15, method_id: 'default', icon: '✨' }
+        ];
+        
+        let currentSelectedStep = null;
+        let stepResults = {}; // Store results for each step
+        
+        // Render interactive processing checklist
+        function renderProcessingChecklist(current) {
+            const checklist = document.getElementById('processing-checklist');
+            if (!checklist) return;
+            
+            // If no current image or no processing done, show all steps as pending
+            if (!current || (!current.steps && !current.processed_url)) {
+                checklist.innerHTML = `
+                    <div style="padding: 1rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; color: #856404; margin-bottom: 1rem;">
+                        <strong>ℹ️ No processing data available.</strong><br>
+                        <span style="font-size: 0.875rem;">Process the image first to see step-by-step transformations. Click "⚡ Process" button on the group header.</span>
+                    </div>
+                ` + PROCESSING_STEPS.map((step, index) => {
+                    return `
+                        <div class="processing-step-item" 
+                             data-step-id="${step.step_id}" 
+                             data-step-index="${index}"
+                             onclick="viewStepDetails(${step.step_id}, ${index})"
+                             style="display: flex; align-items: center; gap: 1rem; padding: 1rem; background: white; border-radius: 0.5rem; border: 2px solid #6c757d; cursor: pointer; opacity: 0.6;">
+                            <div style="font-size: 1.5rem;">${step.icon}</div>
+                            <div style="flex: 1;">
+                                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                    <span style="color: #6c757d; font-weight: bold; font-size: 1.2rem;">○</span>
+                                    <strong style="font-size: 0.95rem;">${step.name}</strong>
+                                </div>
+                                <div style="font-size: 0.75rem; color: #666;">
+                                    Not executed yet
+                                </div>
+                            </div>
+                            <button onclick="event.stopPropagation(); reExecuteStep(${step.step_id}, ${index})" 
+                                    style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;">
+                                🔄 Execute
+                            </button>
+                        </div>
+                    `;
+                }).join('');
+                return;
+            }
+            
+            checklist.innerHTML = PROCESSING_STEPS.map((step, index) => {
+                // Check if step was executed
+                const stepData = getStepData(current, step.step_id);
+                const isCompleted = stepData !== null;
+                const status = isCompleted ? 'completed' : 'pending';
+                const statusIcon = isCompleted ? '✓' : '○';
+                const statusColor = isCompleted ? '#28a745' : '#6c757d';
+                
+                return `
+                    <div class="processing-step-item" 
+                         data-step-id="${step.step_id}" 
+                         data-step-index="${index}"
+                         onclick="viewStepDetails(${step.step_id}, ${index})"
+                         style="display: flex; align-items: center; gap: 1rem; padding: 1rem; background: white; border-radius: 0.5rem; border: 2px solid ${statusColor}; cursor: pointer; transition: all 0.2s;"
+                         onmouseover="this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)'"
+                         onmouseout="this.style.boxShadow='none'">
+                        <div style="font-size: 1.5rem;">${step.icon}</div>
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                <span style="color: ${statusColor}; font-weight: bold; font-size: 1.2rem;">${statusIcon}</span>
+                                <strong style="font-size: 0.95rem;">${step.name}</strong>
+                            </div>
+                            <div style="font-size: 0.75rem; color: #666;">
+                                ${stepData ? formatStepDetails(stepData) : 'Not executed yet'}
+                            </div>
+                        </div>
+                        <button onclick="event.stopPropagation(); reExecuteStep(${step.step_id}, ${index})" 
+                                style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;">
+                            🔄 Re-execute
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Get step data from current processing result
+        function getStepData(current, stepId) {
+            if (!current || !current.steps) return null;
+            
+            // Map step_id to step data keys
+            const stepMap = {
+                0: 'assumptions',
+                1: 'quality_gates',
+                2: 'color_separation',
+                3: 'illumination_normalization',
+                4: 'grid_detection',
+                5: 'smudge_removal',
+                6: 'rotation_correction',
+                7: 'fft_reconstruction',
+                8: 'grid_line_detection',
+                9: 'grid_spacing',
+                10: 'affine_transform',
+                11: 'trace_extraction',
+                12: 'apply_transform',
+                13: 'skeletonize',
+                14: 'trace_to_signal',
+                15: 'post_process'
+            };
+            
+            const stepKey = stepMap[stepId];
+            return current.steps[stepKey] || null;
+        }
+        
+        // Format step details for display
+        function formatStepDetails(stepData) {
+            if (!stepData) return 'No details available';
+            
+            const details = [];
+            if (stepData.edge_pixels !== undefined) {
+                details.push(`${stepData.edge_pixels} edge pixels`);
+            }
+            if (stepData.fine_lines !== undefined && stepData.bold_lines !== undefined) {
+                details.push(`${stepData.fine_lines} fine, ${stepData.bold_lines} bold lines`);
+            }
+            if (stepData.blur_score !== undefined) {
+                details.push(`Blur: ${stepData.blur_score.toFixed(1)}`);
+            }
+            if (stepData.dpi !== undefined) {
+                details.push(`DPI: ${stepData.dpi}`);
+            }
+            if (stepData.method) {
+                details.push(`Method: ${stepData.method}`);
+            }
+            if (stepData.smudge_count !== undefined) {
+                details.push(`${stepData.smudge_count} smudges removed`);
+            }
+            
+            return details.length > 0 ? details.join(', ') : 'Completed';
+        }
+        
+        // View step details
+        window.viewStepDetails = function(stepId, stepIndex) {
+            const current = currentComparisonImages[currentComparisonIndex];
+            if (!current) return;
+            
+            currentSelectedStep = { stepId, stepIndex };
+            const step = PROCESSING_STEPS[stepIndex];
+            const stepData = getStepData(current, stepId);
+            
+            const viewer = document.getElementById('step-detail-viewer');
+            const title = document.getElementById('step-detail-title');
+            const beforeImg = document.getElementById('step-before-image');
+            const afterImg = document.getElementById('step-after-image');
+            const metricsContent = document.getElementById('step-metrics-content');
+            
+            if (!viewer || !title) return;
+            
+            // Show viewer
+            viewer.style.display = 'block';
+            
+            // Update title
+            title.textContent = `${step.icon} ${step.name}`;
+            
+            // Set before image (original or previous step result)
+            const originalUrl = current.original_url || (current.path ? `https://storage.googleapis.com/${current.bucket || GCS_BUCKETS[0]}/${current.path}` : '');
+            if (beforeImg) {
+                beforeImg.src = originalUrl;
+            }
+            
+            // Set after image (current step result or processed image)
+            let afterUrl = originalUrl;
+            
+            // Special handling for color separation - show separated images
+            const imagesContainer = document.getElementById('step-images-container');
+            const afterLabel = document.getElementById('step-after-label');
+            
+            if (stepId === 2 && stepData) {
+                // Color separation step - show trace_image (ECG trace only)
+                const traceImageBase64 = stepData.trace_image_base64 || stepData.output_image_base64;
+                
+                if (traceImageBase64) {
+                    afterUrl = `data:image/png;base64,${traceImageBase64}`;
+                    if (afterLabel) {
+                        afterLabel.textContent = 'ECG Trace Only (After Separation)';
+                    }
+                }
+                
+                // Update layout to show 3 images if we have grid mask
+                if (stepData.grid_mask_base64 || stepData.grid_mask) {
+                    if (imagesContainer) {
+                        imagesContainer.style.gridTemplateColumns = '1fr 1fr 1fr';
+                        
+                        // Add grid image panel
+                        let gridPanel = document.getElementById('step-grid-image-panel');
+                        if (!gridPanel) {
+                            gridPanel = document.createElement('div');
+                            gridPanel.id = 'step-grid-image-panel';
+                            imagesContainer.appendChild(gridPanel);
+                        }
+                        
+                        // For grid mask, we'd need to convert it to an image
+                        // For now, show a placeholder or use the original with grid overlay
+                        gridPanel.innerHTML = `
+                            <h5 style="margin: 0 0 0.5rem 0; color: #666; font-size: 0.875rem;">Grid Only</h5>
+                            <div style="border: 1px solid #ddd; border-radius: 0.5rem; overflow: hidden; background: #f8f9fa; padding: 1rem; text-align: center; color: #666;">
+                                <p style="margin: 0; font-size: 0.875rem;">Grid mask detected. Grid pixels: ${stepData.grid_pixels || stepData.metrics?.grid_pixels || 'N/A'}</p>
+                            </div>
+                        `;
+                    }
+                } else {
+                    // Reset to 2 columns if no grid image
+                    if (imagesContainer) {
+                        imagesContainer.style.gridTemplateColumns = '1fr 1fr';
+                        const gridPanel = document.getElementById('step-grid-image-panel');
+                        if (gridPanel) gridPanel.remove();
+                    }
+                }
+            } else {
+                // Reset layout for other steps
+                if (imagesContainer) {
+                    imagesContainer.style.gridTemplateColumns = '1fr 1fr';
+                    const gridPanel = document.getElementById('step-grid-image-panel');
+                    if (gridPanel) gridPanel.remove();
+                }
+                if (afterLabel) {
+                    afterLabel.textContent = 'After';
+                }
+            }
+            
+            if (stepData && stepData.output_image_base64) {
+                afterUrl = `data:image/png;base64,${stepData.output_image_base64}`;
+            } else if (current.processed_image_base64) {
+                afterUrl = `data:image/png;base64,${current.processed_image_base64}`;
+            } else if (current.processed_url && current.processed_url !== originalUrl) {
+                afterUrl = current.processed_url;
+            }
+            
+            if (afterImg) {
+                afterImg.src = afterUrl;
+            }
+            
+            // Update metrics
+            if (metricsContent && stepData) {
+                const metrics = [];
+                Object.keys(stepData).forEach(key => {
+                    if (key !== 'output_image_base64' && key !== 'input_image_base64' && typeof stepData[key] !== 'object') {
+                        metrics.push(`<strong>${key}:</strong> ${stepData[key]}`);
+                    }
+                });
+                metricsContent.innerHTML = metrics.length > 0 ? metrics.join('<br>') : 'No metrics available';
+            } else if (metricsContent) {
+                metricsContent.innerHTML = 'Step not executed yet. Click "Re-execute Step" to process.';
+            }
+            
+            // Render visualization if applicable
+            renderStepVisualization(stepId, stepData, current);
+            
+            // Scroll to viewer
+            viewer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        };
+        
+        // Close step detail viewer
+        window.closeStepDetailViewer = function() {
+            const viewer = document.getElementById('step-detail-viewer');
+            if (viewer) {
+                viewer.style.display = 'none';
+            }
+            currentSelectedStep = null;
+        };
+        
+        // Render visualization for step
+        function renderStepVisualization(stepId, stepData, current) {
+            const canvas = document.getElementById('step-visualization-canvas');
+            const container = document.getElementById('step-visualization');
+            if (!canvas || !container) return;
+            
+            // Hide by default, show only if we have visualization data
+            container.style.display = 'none';
+            
+            if (!stepData || !current) return;
+            
+            // Get the image to draw on
+            const img = new Image();
+            const originalUrl = current.original_url || (current.path ? `https://storage.googleapis.com/${current.bucket || GCS_BUCKETS[0]}/${current.path}` : '');
+            
+            img.onload = function() {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                
+                // Draw step-specific visualizations
+                if (stepId === 2 && stepData.edge_detection) {
+                    // Edge detection visualization
+                    drawEdgeVisualization(ctx, stepData);
+                    container.style.display = 'block';
+                } else if (stepId === 4 && stepData.grid_detection) {
+                    // Grid detection visualization
+                    drawGridVisualization(ctx, stepData);
+                    container.style.display = 'block';
+                } else if (stepId === 5 && stepData.smudge_mask) {
+                    // Smudge removal visualization
+                    drawSmudgeVisualization(ctx, stepData);
+                    container.style.display = 'block';
+                }
+            };
+            
+            img.src = originalUrl;
+        }
+        
+        // Draw edge detection visualization
+        function drawEdgeVisualization(ctx, stepData) {
+            if (!stepData.bounding_box) return;
+            
+            const bbox = stepData.bounding_box;
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
+        }
+        
+        // Draw grid detection visualization
+        function drawGridVisualization(ctx, stepData) {
+            // Draw grid lines if available
+            if (stepData.horizontal_lines) {
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 1;
+                stepData.horizontal_lines.forEach(line => {
+                    ctx.beginPath();
+                    ctx.moveTo(line.x1 || 0, line.y || 0);
+                    ctx.lineTo(line.x2 || ctx.canvas.width, line.y || 0);
+                    ctx.stroke();
+                });
+            }
+            
+            if (stepData.vertical_lines) {
+                ctx.strokeStyle = '#0000ff';
+                ctx.lineWidth = 1;
+                stepData.vertical_lines.forEach(line => {
+                    ctx.beginPath();
+                    ctx.moveTo(line.x || 0, line.y1 || 0);
+                    ctx.lineTo(line.x || 0, line.y2 || ctx.canvas.height);
+                    ctx.stroke();
+                });
+            }
+        }
+        
+        // Draw smudge removal visualization
+        function drawSmudgeVisualization(ctx, stepData) {
+            if (!stepData.smudge_mask) return;
+            
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+            // Note: Would need to decode smudge_mask from base64 or array
+            // This is a placeholder
+        }
+        
+        // Re-execute a step
+        window.reExecuteStep = async function(stepId, stepIndex) {
+            const current = currentComparisonImages[currentComparisonIndex];
+            if (!current) {
+                alert('No image selected');
+                return;
+            }
+            
+            const step = PROCESSING_STEPS[stepIndex];
+            if (!step) return;
+            
+            // Show loading state
+            const stepItem = document.querySelector(`.processing-step-item[data-step-id="${stepId}"]`);
+            if (stepItem) {
+                stepItem.style.opacity = '0.5';
+                stepItem.style.pointerEvents = 'none';
+            }
+            
+            try {
+                // Get original image
+                const originalUrl = current.original_url || (current.path ? `https://storage.googleapis.com/${current.bucket || GCS_BUCKETS[0]}/${current.path}` : '');
+                
+                // Fetch image and convert to base64
+                const response = await fetch(originalUrl);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                
+                reader.onloadend = async function() {
+                    const base64data = reader.result.split(',')[1];
+                    
+                    // Call execute-step endpoint
+                    const executeResponse = await fetch(`${PYTHON_SERVICE_URL}/execute-step`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            step_id: stepId,
+                            method_id: step.method_id,
+                            image: base64data,
+                            previous_result: stepResults[stepId - 1] || {}
+                        })
+                    });
+                    
+                    if (!executeResponse.ok) {
+                        throw new Error(`HTTP error! status: ${executeResponse.status}`);
+                    }
+                    
+                    const result = await executeResponse.json();
+                    
+                    if (result.success) {
+                        // Store result
+                        stepResults[stepId] = result;
+                        
+                        // Update step data in current image
+                        if (!current.steps) current.steps = {};
+                        const stepKey = getStepKey(stepId);
+                        
+                        // Special handling for color separation - store trace and grid images
+                        if (stepId === 2 && result.grid_mask) {
+                            // Color separation returns trace_image and grid_mask
+                            // Convert grid_mask to image if needed
+                            current.steps[stepKey] = {
+                                ...result.metrics,
+                                output_image_base64: result.output_image, // This is trace_image
+                                trace_image_base64: result.output_image,
+                                grid_mask_base64: result.grid_mask, // May need conversion
+                                input_image_base64: result.input_image
+                            };
+                        } else {
+                            current.steps[stepKey] = {
+                                ...result.metrics,
+                                output_image_base64: result.output_image,
+                                input_image_base64: result.input_image
+                            };
+                        }
+                        
+                        // Refresh checklist
+                        renderProcessingChecklist(current);
+                        
+                        // If step detail viewer is open, refresh it
+                        if (currentSelectedStep && currentSelectedStep.stepId === stepId) {
+                            viewStepDetails(stepId, stepIndex);
+                        }
+                        
+                        alert(`Step "${step.name}" executed successfully!`);
+                    } else {
+                        throw new Error(result.error || 'Step execution failed');
+                    }
+                };
+                
+                reader.readAsDataURL(blob);
+                
+            } catch (error) {
+                console.error('Error re-executing step:', error);
+                alert(`Error executing step: ${error.message}`);
+            } finally {
+                if (stepItem) {
+                    stepItem.style.opacity = '1';
+                    stepItem.style.pointerEvents = 'auto';
+                }
+            }
+        };
+        
+        // Get step key from step ID
+        function getStepKey(stepId) {
+            const keyMap = {
+                0: 'assumptions',
+                1: 'quality_gates',
+                2: 'color_separation',
+                3: 'illumination_normalization',
+                4: 'grid_detection',
+                5: 'smudge_removal',
+                6: 'rotation_correction',
+                7: 'fft_reconstruction',
+                8: 'grid_line_detection',
+                9: 'grid_spacing',
+                10: 'affine_transform',
+                11: 'trace_extraction',
+                12: 'apply_transform',
+                13: 'skeletonize',
+                14: 'trace_to_signal',
+                15: 'post_process'
+            };
+            return keyMap[stepId] || 'unknown';
+        }
+        
+        // Download step image
+        window.downloadStepImage = function() {
+            const afterImg = document.getElementById('step-after-image');
+            if (!afterImg || !afterImg.src) {
+                alert('No image to download');
+                return;
+            }
+            
+            const link = document.createElement('a');
+            link.href = afterImg.src;
+            link.download = `step-${currentSelectedStep?.stepId || 'processed'}.png`;
+            link.click();
         };
         
         // Render processing stages
@@ -2106,21 +2663,154 @@
             
             console.log('Overlays:', { showEdges, showSmudges, showGrid });
             
-            // Get the current image elements
-            const leftImg = document.getElementById('comparison-left');
+            // Get all image elements in the comparison view
             const groundTruthImg = document.getElementById('comparison-ground-truth');
+            const originalImg = document.getElementById('comparison-original');
+            const processedImg = document.getElementById('comparison-processed');
             
-            // Apply overlays to visible images
-            if (leftImg) {
-                applyOverlaysToImage(leftImg, showEdges, showSmudges, showGrid, 'left');
-            }
+            // Apply overlays to all visible images
             if (groundTruthImg) {
                 applyOverlaysToImage(groundTruthImg, showEdges, showSmudges, showGrid, 'ground-truth');
             }
+            if (originalImg) {
+                applyOverlaysToImage(originalImg, showEdges, showSmudges, showGrid, 'original');
+            }
+            if (processedImg) {
+                applyOverlaysToImage(processedImg, showEdges, showSmudges, showGrid, 'processed');
+            }
         };
         
+        // Cache for edge/grid detection results per image URL
+        const edgeDetectionCache = new Map();
+        const gridDetectionCache = new Map();
+        
+        // Detect edges for an image
+        async function detectEdgesForImage(imageUrl, imageType) {
+            // Check cache first
+            if (edgeDetectionCache.has(imageUrl)) {
+                return edgeDetectionCache.get(imageUrl);
+            }
+            
+            try {
+                // Fetch image and convert to base64
+                const response = await fetch(imageUrl);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                
+                return new Promise((resolve) => {
+                    reader.onloadend = async function() {
+                        const base64data = reader.result.split(',')[1];
+                        
+                        try {
+                            // Call edge detection endpoint
+                            const detectResponse = await fetch(`${PYTHON_SERVICE_URL}/detect-edges`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    image: base64data,
+                                    method: 'canny',
+                                    crop: false
+                                })
+                            });
+                            
+                            if (detectResponse.ok) {
+                                const result = await detectResponse.json();
+                                if (result.success && result.edges_detected) {
+                                    const edgeData = {
+                                        edges_detected: true,
+                                        edge_pixels: result.edge_pixels || 0,
+                                        bounding_box: result.bounding_box || null
+                                    };
+                                    edgeDetectionCache.set(imageUrl, edgeData);
+                                    resolve(edgeData);
+                                } else {
+                                    resolve({ edges_detected: false, edge_pixels: 0 });
+                                }
+                            } else {
+                                resolve({ edges_detected: false, edge_pixels: 0 });
+                            }
+                        } catch (error) {
+                            console.error('Error detecting edges:', error);
+                            resolve({ edges_detected: false, edge_pixels: 0 });
+                        }
+                    };
+                    
+                    reader.readAsDataURL(blob);
+                });
+            } catch (error) {
+                console.error('Error fetching image for edge detection:', error);
+                return { edges_detected: false, edge_pixels: 0 };
+            }
+        }
+        
+        // Detect grid for an image
+        async function detectGridForImage(imageUrl, imageType) {
+            // Check cache first
+            if (gridDetectionCache.has(imageUrl)) {
+                return gridDetectionCache.get(imageUrl);
+            }
+            
+            try {
+                // Fetch image and convert to base64
+                const response = await fetch(imageUrl);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                
+                return new Promise((resolve) => {
+                    reader.onloadend = async function() {
+                        const base64data = reader.result.split(',')[1];
+                        
+                        try {
+                            // Call grid detection via execute-step endpoint
+                            const detectResponse = await fetch(`${PYTHON_SERVICE_URL}/execute-step`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    step_id: 4, // Multi-Scale Grid Detection
+                                    method_id: 'default',
+                                    image: base64data,
+                                    previous_result: {}
+                                })
+                            });
+                            
+                            if (detectResponse.ok) {
+                                const result = await detectResponse.json();
+                                if (result.success && result.metrics) {
+                                    const gridData = {
+                                        grid_detected: true,
+                                        fine_lines: result.metrics.mm1_lines || 0,
+                                        bold_lines: result.metrics.mm5_lines || 0,
+                                        horizontal_lines: result.grid_lines?.horizontal || [],
+                                        vertical_lines: result.grid_lines?.vertical || []
+                                    };
+                                    gridDetectionCache.set(imageUrl, gridData);
+                                    resolve(gridData);
+                                } else {
+                                    resolve({ grid_detected: false, fine_lines: 0, bold_lines: 0 });
+                                }
+                            } else {
+                                resolve({ grid_detected: false, fine_lines: 0, bold_lines: 0 });
+                            }
+                        } catch (error) {
+                            console.error('Error detecting grid:', error);
+                            resolve({ grid_detected: false, fine_lines: 0, bold_lines: 0 });
+                        }
+                    };
+                    
+                    reader.readAsDataURL(blob);
+                });
+            } catch (error) {
+                console.error('Error fetching image for grid detection:', error);
+                return { grid_detected: false, fine_lines: 0, bold_lines: 0 };
+            }
+        }
+        
         // Apply overlays to an image element
-        function applyOverlaysToImage(imgElement, showEdges, showSmudges, showGrid, imageType) {
+        async function applyOverlaysToImage(imgElement, showEdges, showSmudges, showGrid, imageType) {
             if (!imgElement || !imgElement.complete) {
                 // Wait for image to load
                 imgElement.onload = () => applyOverlaysToImage(imgElement, showEdges, showSmudges, showGrid, imageType);
@@ -2130,6 +2820,17 @@
             // Get the current image data
             const current = currentComparisonImages[currentComparisonIndex];
             if (!current) return;
+            
+            // Get image URL based on type
+            let imageUrl = imgElement.src;
+            if (imageType === 'ground-truth') {
+                // For ground truth, we need to detect edges/grid on it
+                imageUrl = imgElement.src;
+            } else if (imageType === 'original') {
+                imageUrl = current.original_url || imgElement.src;
+            } else if (imageType === 'processed') {
+                imageUrl = current.processed_url || current.original_url || imgElement.src;
+            }
             
             // Create canvas overlay
             const canvasId = `overlay-canvas-${imageType}`;
@@ -2153,7 +2854,6 @@
             
             // Set canvas size to match image display size
             const imgRect = imgElement.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
             const imgDisplayWidth = imgElement.offsetWidth || imgRect.width;
             const imgDisplayHeight = imgElement.offsetHeight || imgRect.height;
             
@@ -2177,14 +2877,39 @@
             const scaleX = canvas.width / (imgElement.naturalWidth || imgElement.width || 1);
             const scaleY = canvas.height / (imgElement.naturalHeight || imgElement.height || 1);
             
+            // Get or compute edge detection for this image
+            let edgeData = null;
+            if (showEdges) {
+                // Try to get from current.steps first
+                if (current.steps && current.steps.edge_detection && current.steps.edge_detection.edges_detected) {
+                    edgeData = current.steps.edge_detection;
+                } else {
+                    // Auto-detect edges for this image
+                    edgeData = await detectEdgesForImage(imageUrl, imageType);
+                }
+            }
+            
+            // Get or compute grid detection for this image
+            let gridData = null;
+            if (showGrid) {
+                // Try to get from current.steps first
+                if (current.steps && current.steps.grid_detection && current.steps.grid_detection.grid_detected) {
+                    gridData = current.steps.grid_detection;
+                } else {
+                    // Auto-detect grid for this image
+                    gridData = await detectGridForImage(imageUrl, imageType);
+                }
+            }
+            
             // Draw edges overlay
-            if (showEdges && current.steps && current.steps.edge_detection) {
+            if (showEdges && edgeData) {
                 ctx.strokeStyle = '#00ff00'; // Green for edges
-                ctx.lineWidth = 1;
+                ctx.lineWidth = 2;
                 ctx.beginPath();
+                
                 // Draw bounding box if available
-                const bbox = current.steps.edge_detection.bounding_box;
-                if (bbox) {
+                if (edgeData.bounding_box) {
+                    const bbox = edgeData.bounding_box;
                     ctx.rect(
                         bbox.x * scaleX,
                         bbox.y * scaleY,
@@ -2192,29 +2917,88 @@
                         bbox.height * scaleY
                     );
                 }
+                
+                // Draw edge pixels if available
+                if (edgeData.edge_pixels && edgeData.edge_pixels > 0) {
+                    // Draw a sample pattern to indicate edges detected
+                    const spacing = Math.min(canvas.width, canvas.height) / 30;
+                    for (let x = 0; x < canvas.width; x += spacing) {
+                        for (let y = 0; y < canvas.height; y += spacing) {
+                            ctx.fillRect(x, y, 2, 2);
+                        }
+                    }
+                }
                 ctx.stroke();
             }
             
             // Draw grid overlay
-            if (showGrid && current.steps && current.steps.grid_detection) {
-                ctx.strokeStyle = '#0000ff'; // Blue for grid
-                ctx.lineWidth = 1;
-                // Draw grid lines if available
-                const fineLines = current.steps.grid_detection.fine_lines || 0;
-                const boldLines = current.steps.grid_detection.bold_lines || 0;
+            if (showGrid && gridData) {
+                // Draw horizontal lines
+                if (gridData.horizontal_lines && Array.isArray(gridData.horizontal_lines)) {
+                    ctx.strokeStyle = '#ff0000'; // Red for horizontal grid lines
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    gridData.horizontal_lines.forEach(line => {
+                        const y = (line.y || line.y1 || 0) * scaleY;
+                        ctx.moveTo(0, y);
+                        ctx.lineTo(canvas.width, y);
+                    });
+                    ctx.stroke();
+                }
                 
-                // Draw sample grid pattern (simplified)
-                const gridSpacing = Math.min(canvas.width, canvas.height) / 20;
-                ctx.beginPath();
-                for (let i = 0; i < canvas.width; i += gridSpacing) {
-                    ctx.moveTo(i, 0);
-                    ctx.lineTo(i, canvas.height);
+                // Draw vertical lines
+                if (gridData.vertical_lines && Array.isArray(gridData.vertical_lines)) {
+                    ctx.strokeStyle = '#0000ff'; // Blue for vertical grid lines
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    gridData.vertical_lines.forEach(line => {
+                        const x = (line.x || line.x1 || 0) * scaleX;
+                        ctx.moveTo(x, 0);
+                        ctx.lineTo(x, canvas.height);
+                    });
+                    ctx.stroke();
                 }
-                for (let i = 0; i < canvas.height; i += gridSpacing) {
-                    ctx.moveTo(0, i);
-                    ctx.lineTo(canvas.width, i);
+                
+                // If no specific lines, draw estimated grid pattern
+                if ((!gridData.horizontal_lines || gridData.horizontal_lines.length === 0) &&
+                    (!gridData.vertical_lines || gridData.vertical_lines.length === 0)) {
+                    const fineLines = gridData.fine_lines || 0;
+                    const boldLines = gridData.bold_lines || 0;
+                    
+                    if (fineLines > 0 || boldLines > 0) {
+                        // Estimate grid spacing
+                        const estimatedSpacing = Math.min(canvas.width, canvas.height) / Math.max(fineLines, boldLines, 20);
+                        
+                        ctx.strokeStyle = '#0000ff';
+                        ctx.lineWidth = 0.5;
+                        ctx.beginPath();
+                        
+                        // Draw fine grid (1mm)
+                        for (let i = 0; i < canvas.width; i += estimatedSpacing) {
+                            ctx.moveTo(i, 0);
+                            ctx.lineTo(i, canvas.height);
+                        }
+                        for (let i = 0; i < canvas.height; i += estimatedSpacing) {
+                            ctx.moveTo(0, i);
+                            ctx.lineTo(canvas.width, i);
+                        }
+                        ctx.stroke();
+                        
+                        // Draw bold grid (5mm) - every 5th line
+                        ctx.strokeStyle = '#0000aa';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        for (let i = 0; i < canvas.width; i += estimatedSpacing * 5) {
+                            ctx.moveTo(i, 0);
+                            ctx.lineTo(i, canvas.height);
+                        }
+                        for (let i = 0; i < canvas.height; i += estimatedSpacing * 5) {
+                            ctx.moveTo(0, i);
+                            ctx.lineTo(canvas.width, i);
+                        }
+                        ctx.stroke();
+                    }
                 }
-                ctx.stroke();
             }
             
             // Draw smudges overlay
@@ -2555,18 +3339,18 @@
                 <!-- View 1: Side-by-Side All 3 Images -->
                 <div id="view-side-by-side" class="view-container">
                     <div class="comparison-images" style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-                    <div class="image-panel" id="panel-ground-truth" style="flex: 1; min-width: 250px; max-width: 33%;">
-                        <h3>Ground Truth</h3>
-                        <img id="comparison-ground-truth" src="" alt="Ground Truth" style="width: 100%; height: auto; border-radius: 0.5rem;">
-                        <p id="comparison-ground-truth-name" class="image-name"></p>
-                    </div>
                     <div class="image-panel" id="panel-original" style="flex: 1; min-width: 250px; max-width: 33%;">
-                        <h3>Original</h3>
+                        <h3>1. Original (Raw Input)</h3>
                         <img id="comparison-original" src="" alt="Original" style="width: 100%; height: auto; border-radius: 0.5rem;">
                         <p id="comparison-original-name" class="image-name"></p>
                     </div>
+                    <div class="image-panel" id="panel-ground-truth" style="flex: 1; min-width: 250px; max-width: 33%;">
+                        <h3>2. Ground Truth (Reference)</h3>
+                        <img id="comparison-ground-truth" src="" alt="Ground Truth" style="width: 100%; height: auto; border-radius: 0.5rem;">
+                        <p id="comparison-ground-truth-name" class="image-name"></p>
+                    </div>
                     <div class="image-panel" id="panel-processed" style="flex: 1; min-width: 250px; max-width: 33%;">
-                        <h3>Processed</h3>
+                        <h3>3. Processed (Result)</h3>
                         <img id="comparison-processed" src="" alt="Processed" style="width: 100%; height: auto; border-radius: 0.5rem;">
                         <p id="comparison-processed-name" class="image-name"></p>
                     </div>
@@ -2600,17 +3384,58 @@
                 <!-- View 3: Step-by-Step Transformation -->
                 <div id="view-step-by-step" class="view-container" style="display: none;">
                     <div class="step-by-step-container" style="margin-top: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 0.5rem;">
-                        <h3 style="margin-top: 0; margin-bottom: 1rem;">🔄 Step-by-Step Transformation</h3>
-                        <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
-                            <button id="step-prev" onclick="navigateStep(-1)" style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer;">← Previous</button>
-                            <span id="step-info" style="flex: 1; text-align: center; font-weight: 500;">Step 1 of 8</span>
-                            <button id="step-next" onclick="navigateStep(1)" style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer;">Next →</button>
+                        <h3 style="margin-top: 0; margin-bottom: 1rem;">🔄 Interactive Processing Checklist</h3>
+                        <p style="margin-bottom: 1rem; color: #666; font-size: 0.875rem;">Click any step to view transformation details. Use "Re-execute" to reprocess individual steps.</p>
+                        
+                        <!-- Processing Steps Checklist -->
+                        <div id="processing-checklist" style="display: grid; gap: 0.75rem; margin-bottom: 1.5rem;">
+                            <!-- Steps will be populated dynamically -->
                         </div>
-                        <div id="step-image-container" style="width: 100%; max-width: 800px; margin: 0 auto; border: 2px solid #ddd; border-radius: 8px; overflow: hidden; background: #fff;">
-                            <img id="step-image" src="" alt="Processing Step" style="width: 100%; height: auto; display: block;">
-                        </div>
-                        <div id="step-description" style="text-align: center; margin-top: 1rem; padding: 1rem; background: white; border-radius: 0.5rem;">
-                            <p style="margin: 0; color: #666;">Loading step information...</p>
+                        
+                        <!-- Step Detail Viewer (shown when step is clicked) -->
+                        <div id="step-detail-viewer" style="display: none; margin-top: 1.5rem; padding: 1rem; background: white; border-radius: 0.5rem; border: 2px solid var(--primary-color);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                <h4 id="step-detail-title" style="margin: 0; color: var(--primary-color);">Step Details</h4>
+                                <button onclick="closeStepDetailViewer()" style="background: #dc3545; color: white; border: none; border-radius: 0.25rem; padding: 0.25rem 0.5rem; cursor: pointer;">✕ Close</button>
+                            </div>
+                            
+                            <!-- Before/After Image Comparison -->
+                            <div id="step-images-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                                <div>
+                                    <h5 style="margin: 0 0 0.5rem 0; color: #666; font-size: 0.875rem;">Before</h5>
+                                    <div style="border: 1px solid #ddd; border-radius: 0.5rem; overflow: hidden; background: #f8f9fa;">
+                                        <img id="step-before-image" src="" alt="Before" style="width: 100%; height: auto; display: block;">
+                                    </div>
+                                </div>
+                                <div>
+                                    <h5 id="step-after-label" style="margin: 0 0 0.5rem 0; color: #666; font-size: 0.875rem;">After</h5>
+                                    <div style="border: 1px solid #ddd; border-radius: 0.5rem; overflow: hidden; background: #f8f9fa;">
+                                        <img id="step-after-image" src="" alt="After" style="width: 100%; height: auto; display: block;">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Step Metrics -->
+                            <div id="step-metrics" style="margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-radius: 0.5rem;">
+                                <h5 style="margin: 0 0 0.5rem 0; font-size: 0.875rem;">Metrics</h5>
+                                <div id="step-metrics-content" style="font-size: 0.875rem; color: #666;">Loading metrics...</div>
+                            </div>
+                            
+                            <!-- Visualization Canvas (for edge detection, grid, etc.) -->
+                            <div id="step-visualization" style="margin-bottom: 1rem;">
+                                <h5 style="margin: 0 0 0.5rem 0; font-size: 0.875rem;">Visualization</h5>
+                                <canvas id="step-visualization-canvas" style="width: 100%; max-width: 800px; border: 1px solid #ddd; border-radius: 0.5rem; background: white;"></canvas>
+                            </div>
+                            
+                            <!-- Action Buttons -->
+                            <div style="display: flex; gap: 0.5rem;">
+                                <button id="step-re-execute-btn" onclick="reExecuteStep()" style="flex: 1; padding: 0.75rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-weight: 500;">
+                                    🔄 Re-execute Step
+                                </button>
+                                <button onclick="downloadStepImage()" style="padding: 0.75rem 1rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">
+                                    💾 Download
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
