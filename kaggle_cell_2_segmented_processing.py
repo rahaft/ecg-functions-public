@@ -1,3 +1,12 @@
+# ============================================================================
+# STEP 2: Segmented Processing Module
+# ============================================================================
+# This file: kaggle_cell_2_segmented_processing.py
+# Purpose: Cell 2 code for Kaggle notebook - Segmented Processing
+# Usage: Copy entire file into Cell 2 of Kaggle notebook
+# Source: functions_python/segmented_processing.py
+# ============================================================================
+
 """
 Segmented Processing Module
 Processes images in overlapping segments with different parameters per segment
@@ -368,3 +377,12 @@ class SegmentedProcessor:
         
         # If all are in overlap, return the first one
         return containing_segments[0]
+
+# ============================================================================
+# STEP 2: Segmented Processing Module
+# ============================================================================
+# This file: kaggle_cell_2_segmented_processing.py
+# Purpose: Cell 2 code for Kaggle notebook - Segmented Processing
+# Usage: Copy entire file into Cell 2 of Kaggle notebook
+# Source: functions_python/segmented_processing.py
+# ============================================================================

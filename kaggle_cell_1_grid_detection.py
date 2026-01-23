@@ -1,3 +1,12 @@
+# ============================================================================
+# STEP 1: Grid Detection Module
+# ============================================================================
+# This file: kaggle_cell_1_grid_detection.py
+# Purpose: Cell 1 code for Kaggle notebook - Grid Detection
+# Usage: Copy entire file into Cell 1 of Kaggle notebook
+# Source: functions_python/grid_detection.py
+# ============================================================================
+
 """
 Enhanced Grid Detection Module
 Implements polynomial line fitting for ECG grid lines with oscillation detection
@@ -552,3 +561,13 @@ class GridDetector:
             quality['missing_lines'] += (3 - len(v_lines))
         
         return quality
+
+
+# ============================================================================
+# STEP 1: Grid Detection Module
+# ============================================================================
+# This file: kaggle_cell_1_grid_detection.py
+# Purpose: Cell 1 code for Kaggle notebook - Grid Detection
+# Usage: Copy entire file into Cell 1 of Kaggle notebook
+# Source: functions_python/grid_detection.py
+# ============================================================================

@@ -134,7 +134,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
-        import { getStorage, ref, listAll, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        // Removed Firebase Storage - using only Google Cloud Storage (GCS)
         
         // Initialize Firebase
         const firebaseConfig = {
@@ -148,13 +148,13 @@
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const storage = getStorage(app);
+        // Removed Firebase Storage - using only Google Cloud Storage (GCS) URLs directly
         
         // Auto sign in anonymously
         signInAnonymously(auth).catch(console.error);
         
         // Version info
-        const APP_VERSION = '2.3.9';
+        const APP_VERSION = '2.4.0';
         const BUILD_TIMESTAMP = '2026.01.22.1143';
         const BUILD_DATE = new Date();
         
@@ -183,6 +183,34 @@
         // Processing state
         let processingGroups = new Set();
         let processedImages = new Map(); // groupKey -> {images: [], subImages: {}}
+        let collapsedGroups = new Set(); // Track which groups are collapsed
+        let currentSetIndex = 0; // Track current set index for "Next Set" functionality
+        
+        // Helper function to extract image number from filename for sorting
+        function extractImageNumber(filename) {
+            if (!filename) return 0;
+            
+            // Try to extract number after dash (e.g., "1006427285-0003.png" -> 3)
+            const dashMatch = filename.match(/-(\d+)/);
+            if (dashMatch) {
+                return parseInt(dashMatch[1], 10);
+            }
+            
+            // Try to extract number from end of filename before extension
+            const endMatch = filename.match(/(\d+)\.(png|jpg|jpeg|tiff|tif)$/i);
+            if (endMatch) {
+                return parseInt(endMatch[1], 10);
+            }
+            
+            // Try to extract any sequence of digits
+            const anyMatch = filename.match(/(\d+)/);
+            if (anyMatch) {
+                return parseInt(anyMatch[1], 10);
+            }
+            
+            // Fallback: return 0 for alphabetical sort
+            return 0;
+        }
         
         // Load images from GCS buckets via manifest
         async function loadImages() {
@@ -265,6 +293,13 @@
                     grouped[groupKey].images.push(img);
                 });
                 
+                // Sort images within each group by image number
+                Object.values(grouped).forEach(group => {
+                    group.images.sort((a, b) => {
+                        return extractImageNumber(a.name) - extractImageNumber(b.name);
+                    });
+                });
+                
                 // Render gallery
                 if (images.length === 0) {
                     loadingEl.innerHTML = `
@@ -281,7 +316,7 @@
                     loadingEl.style.display = 'none';
                     galleryGrid.innerHTML = '';
                     
-                    // Sort groups by key
+                    // Sort groups by key (images within groups are already sorted by number)
                     const sortedGroups = Object.values(grouped).sort((a, b) => {
                         // Put train first, then test, then others
                         if (a.is_train && !b.is_train) return -1;
@@ -343,48 +378,78 @@
         function renderGroup(group, maxImages = null) {
             const galleryGrid = document.getElementById('gallery-grid');
             const imagesToShow = maxImages ? group.images.slice(0, maxImages) : group.images;
+            const isCollapsed = collapsedGroups.has(group.key);
+            
+            // Declare processing state variables FIRST (before using them)
+            const isProcessing = processingGroups.has(group.key);
+            const isProcessed = processedImages.has(group.key);
             
             // Add group header
             const groupHeader = document.createElement('div');
             groupHeader.className = 'gallery-group-header';
+            if (isProcessed) {
+                groupHeader.classList.add('processed');
+            }
+            if (isProcessing) {
+                groupHeader.classList.add('processing');
+            }
             groupHeader.dataset.groupKey = group.key;
             groupHeader.style.gridColumn = '1 / -1';
-            groupHeader.style.marginTop = displayedGroups === 0 ? '0' : '2rem';
-            groupHeader.style.marginBottom = '1rem';
-            groupHeader.style.padding = '0.75rem';
-            groupHeader.style.background = 'var(--card-bg)';
+            groupHeader.style.marginTop = displayedGroups === 0 ? '0' : '1rem';
+            groupHeader.style.marginBottom = '0.5rem';
+            groupHeader.style.padding = '1rem';
+            groupHeader.style.background = isProcessed ? '#f8f9fa' : 'var(--card-bg)';
             groupHeader.style.borderRadius = '0.5rem';
-            groupHeader.style.borderLeft = '4px solid var(--primary-color)';
+            groupHeader.style.borderLeft = isProcessed ? '4px solid #28a745' : (isProcessing ? '4px solid #ffc107' : '4px solid var(--primary-color)');
+            groupHeader.style.cursor = isProcessed ? 'pointer' : 'default';
+            
+            // Add click handler to header for processed groups to toggle collapse
+            if (isProcessed) {
+                groupHeader.onclick = (e) => {
+                    // Don't toggle if clicking on buttons
+                    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+                        return;
+                    }
+                    toggleGroupCollapse(group.key, e);
+                };
+            }
             
             const groupLabel = group.folder || group.key;
             const groupType = group.is_train ? '📚 Train' : group.is_test ? '🧪 Test' : '📁';
-            const isProcessing = processingGroups.has(group.key);
-            const isProcessed = processedImages.has(group.key);
             
             groupHeader.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                    <div style="flex: 1;">
-                        <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">
-                            ${groupType} ${groupLabel}
-                            ${isProcessed ? ' <span style="color: green; font-size: 0.875rem;">✓ Processed</span>' : ''}
-                            ${isProcessing ? ' <span style="color: orange; font-size: 0.875rem;">⏳ Processing</span>' : ''}
-                        </h2>
-                        <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
-                            ${imagesToShow.length}${maxImages && imagesToShow.length < group.images.length ? ` of ${group.images.length}` : ''} image(s) in this group
-                        </p>
+                    <div style="flex: 1; display: flex; align-items: center; gap: 0.5rem;">
+                        ${isProcessed ? `
+                            <button onclick="event.stopPropagation(); toggleGroupCollapse('${group.key}')" 
+                                    style="padding: 0.25rem 0.5rem; background: transparent; border: 1px solid #ddd; border-radius: 0.25rem; cursor: pointer; font-size: 0.875rem; color: var(--text-secondary);"
+                                    title="${isCollapsed ? 'Expand' : 'Collapse'} set">
+                                ${isCollapsed ? '▶' : '▼'}
+                            </button>
+                        ` : '<span style="width: 2rem;"></span>'}
+                        <div style="flex: 1;">
+                            <h2 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">
+                                ${groupType} ${groupLabel}
+                                ${isProcessed ? ' <span style="color: green; font-size: 0.875rem;">✓ Processed</span>' : ''}
+                                ${isProcessing ? ' <span style="color: orange; font-size: 0.875rem;">⏳ Processing</span>' : ''}
+                            </h2>
+                            <p style="margin: 0.25rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
+                                ${imagesToShow.length}${maxImages && imagesToShow.length < group.images.length ? ` of ${group.images.length}` : ''} image(s) in this set
+                            </p>
+                        </div>
                     </div>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
                         ${isProcessed ? `
                             <button class="view-results-btn" 
                                     data-group-key="${group.key}"
-                                    onclick="viewProcessedResults('${group.key}')"
+                                    onclick="event.stopPropagation(); viewProcessedResults('${group.key}')"
                                     style="padding: 0.5rem 1rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;"
                                     title="View processed results">
                                 👁️ View Results
                             </button>
                             <button class="reset-group-btn" 
                                     data-group-key="${group.key}"
-                                    onclick="resetGroupProcessing('${group.key}')"
+                                    onclick="event.stopPropagation(); resetGroupProcessing('${group.key}')"
                                     style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;"
                                     title="Reset processing status">
                                 🔄 Reset
@@ -392,7 +457,7 @@
                         ` : ''}
                         <button class="process-group-btn" 
                                 data-group-key="${group.key}"
-                                onclick="processGroup('${group.key}')"
+                                onclick="event.stopPropagation(); processGroup('${group.key}')"
                                 ${isProcessing ? 'disabled' : ''}
                                 style="padding: 0.5rem 1rem; background: ${isProcessing ? '#ccc' : 'var(--primary-color)'}; color: white; border: none; border-radius: 0.375rem; cursor: ${isProcessing ? 'not-allowed' : 'pointer'}; font-size: 0.875rem;">
                             ${isProcessing ? '⏳ Processing...' : isProcessed ? '🔄 Reprocess' : '⚡ Process'}
@@ -401,6 +466,11 @@
                 </div>
             `;
             galleryGrid.appendChild(groupHeader);
+            
+            // Only render images if not collapsed
+            if (isCollapsed) {
+                return; // Don't render images if collapsed
+            }
             
             // Add images in this group
             imagesToShow.forEach(img => {
@@ -430,6 +500,14 @@
                     `;
                 }
                 
+                // Check if this specific image has been processed
+                const imageProcessed = processed?.images?.some(p => 
+                    p.original_name === img.name || 
+                    p.name === img.name ||
+                    p.path === img.path ||
+                    p.path === img.name
+                );
+                
                 item.innerHTML = `
                     <img src="${img.url}" alt="${img.name}" loading="lazy" 
                          onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'%3E%3Ctext x=\\'50%25\\' y=\\'50%25\\' text-anchor=\\'middle\\'%3EFailed to load%3C/text%3E%3C/svg%3E';">
@@ -437,10 +515,43 @@
                         <h3>${img.name}</h3>
                         <p style="font-size: 0.7rem; color: #888;">${img.bucket || 'unknown'}</p>
                         ${isBaseImage ? '<span style="color: green; font-size: 0.7rem;">Base Image</span>' : ''}
+                        ${imageProcessed ? '<span style="color: green; font-size: 0.7rem;">✓ Processed</span>' : ''}
+                    </div>
+                    <div style="padding: 0.75rem; display: flex; gap: 0.5rem; justify-content: center; align-items: center; border-top: 1px solid #eee; background: #f9f9f9;">
+                        <button class="process-single-image-btn" 
+                                data-group-key="${group.key}"
+                                data-image-path="${img.path || img.name}"
+                                data-image-name="${img.name}"
+                                data-bucket="${img.bucket || group.images[0]?.bucket || GCS_BUCKETS[0]}"
+                                onclick="processSingleImage('${group.key}', '${img.path || img.name}', '${img.name}', '${img.bucket || group.images[0]?.bucket || GCS_BUCKETS[0]}')"
+                                style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.8rem; font-weight: 500; flex: 1; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.2s;"
+                                onmouseover="this.style.background='var(--primary-hover)'; this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 6px rgba(0,0,0,0.15)';"
+                                onmouseout="this.style.background='var(--primary-color)'; this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.1)';"
+                                title="Process this individual image">
+                            ⚡ Process Image
+                        </button>
+                        ${imageProcessed ? `
+                            <button class="view-single-result-btn" 
+                                    data-group-key="${group.key}"
+                                    data-image-name="${img.name}"
+                                    onclick="viewSingleImageResult('${group.key}', '${img.name}')"
+                                    style="padding: 0.5rem 1rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.8rem; font-weight: 500; flex: 1; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: all 0.2s;"
+                                    onmouseover="this.style.background='#218838'; this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 6px rgba(0,0,0,0.15)';"
+                                    onmouseout="this.style.background='#28a745'; this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.1)';"
+                                    title="View processed results for this image">
+                                👁️ View Results
+                            </button>
+                        ` : ''}
                     </div>
                     ${subImagesHtml}
                 `;
-                item.onclick = () => {
+                // Handle click on image (but not on buttons)
+                item.onclick = (e) => {
+                    // Don't trigger if clicking on a button
+                    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+                        return;
+                    }
+                    
                     if (processed && processed.images.length > 0) {
                         // Find matching processed image
                         const processedImg = processed.images.find(p => 
@@ -697,41 +808,82 @@
             const progressContainer = createProgressIndicator(groupKey, group.images.length);
             
             try {
-                // Get image paths from group
-                const imagePaths = group.images.map(img => img.path || img.name);
-                const bucketName = group.images[0]?.bucket || GCS_BUCKETS[0];
+                // Get image paths from group - need to handle different buckets per image
+                const imageRequests = group.images.map(img => ({
+                    path: img.path || img.name,
+                    bucket: img.bucket || GCS_BUCKETS[0],
+                    name: img.name
+                }));
                 
-                console.log(`Processing group ${groupKey} with ${imagePaths.length} images`);
-                
-                // Update progress: Starting
-                updateProgress(progressContainer, 0, imagePaths.length, 'Connecting to server...');
-                
-                // Call process-gcs-batch endpoint
-                updateProgress(progressContainer, 0, imagePaths.length, 'Processing images...');
-                const response = await fetch(`${PYTHON_SERVICE_URL}/process-gcs-batch`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        image_paths: imagePaths, 
-                        bucket: bucketName, 
-                        options: {
-                            edge_detection: true,
-                            color_separation: true,
-                            grid_detection: true,
-                            quality_check: true,
-                            crop_to_content: false,
-                            color_method: 'lab'
-                        }
-                    })
+                // Group by bucket for batch processing
+                const bucketGroups = {};
+                imageRequests.forEach(req => {
+                    const bucket = req.bucket;
+                    if (!bucketGroups[bucket]) {
+                        bucketGroups[bucket] = [];
+                    }
+                    bucketGroups[bucket].push(req);
                 });
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                // Process each bucket group separately
+                const allResults = [];
+                let processedCount = 0;
+                
+                console.log(`Processing group ${groupKey} with ${imageRequests.length} images across ${Object.keys(bucketGroups).length} bucket(s)`);
+                
+                for (const [bucketName, requests] of Object.entries(bucketGroups)) {
+                    const imagePaths = requests.map(r => r.path);
+                    console.log(`Processing ${imagePaths.length} images from bucket: ${bucketName}`);
+                    
+                    updateProgress(progressContainer, processedCount, imageRequests.length, `Processing ${bucketName}...`);
+                    
+                    // Call process-gcs-batch endpoint for this bucket
+                    const response = await fetch(`${PYTHON_SERVICE_URL}/process-gcs-batch`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            image_paths: imagePaths, 
+                            bucket: bucketName, 
+                            options: {
+                                edge_detection: true,
+                                color_separation: true,
+                                grid_detection: true,
+                                quality_check: true,
+                                crop_to_content: false,
+                                color_method: 'lab'
+                            }
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText} for bucket ${bucketName}`);
+                    }
+                    
+                    const bucketData = await response.json();
+                    console.log(`Backend response for ${bucketName}:`, bucketData);
+                    
+                    if (bucketData.success && bucketData.results) {
+                        // Add bucket info to each result
+                        bucketData.results.forEach((result, idx) => {
+                            if (idx < requests.length) {
+                                result.bucket = bucketName;
+                                result.original_name = requests[idx].name;
+                            }
+                        });
+                        allResults.push(...bucketData.results);
+                    }
+                    
+                    processedCount += imagePaths.length;
                 }
                 
-                const data = await response.json();
+                // Combine all results into single response format
+                const data = {
+                    success: true,
+                    results: allResults,
+                    count: allResults.length
+                };
                 
-                console.log('Backend response:', data);
+                console.log('Combined backend response:', data);
                 
                 if (data.success) {
                     // Filter to only successful results
@@ -744,7 +896,7 @@
                     }
                     
                     // Update progress: Complete
-                    updateProgress(progressContainer, imagePaths.length, imagePaths.length, 
+                    updateProgress(progressContainer, imageRequests.length, imageRequests.length, 
                         successfulResults.length > 0 ? 
                         `Complete! ${successfulResults.length} succeeded, ${failedResults.length} failed` : 
                         `Failed! All ${failedResults.length} images failed`);
@@ -755,11 +907,22 @@
                         const imagePath = result.path || result.name || '';
                         const bucket = result.bucket || bucketName || GCS_BUCKETS[0];
                         
+                        // Get processed image - check for base64 first, then URL
+                        let processedImageUrl = '';
+                        if (result.processed_image) {
+                            processedImageUrl = `data:image/png;base64,${result.processed_image}`;
+                        } else if (result.processed_url) {
+                            processedImageUrl = result.processed_url;
+                        } else {
+                            processedImageUrl = result.original_url || (imagePath ? `https://storage.googleapis.com/${bucket}/${imagePath}` : '');
+                        }
+                        
                         return {
                             name: result.name || imagePath.split('/').pop() || 'unknown',
                             original_name: result.name || imagePath.split('/').pop() || 'unknown',
                             original_url: result.original_url || (imagePath ? `https://storage.googleapis.com/${bucket}/${imagePath}` : ''),
-                            processed_url: result.processed_url || result.original_url || '',
+                            processed_url: processedImageUrl,
+                            processed_image_base64: result.processed_image || null,
                             path: imagePath,
                             bucket: bucket,
                             metrics: result.metrics || {},
@@ -1079,6 +1242,214 @@
             document.head.appendChild(style);
         }
         
+        // Process a single image
+        window.processSingleImage = async function(groupKey, imagePath, imageName, bucketName) {
+            const btn = document.querySelector(`.process-single-image-btn[data-image-name="${imageName}"]`);
+            if (!btn) return;
+            
+            // Disable button and show processing
+            btn.disabled = true;
+            btn.textContent = '⏳ Processing...';
+            btn.style.background = '#ccc';
+            
+            try {
+                console.log(`Processing single image: ${imageName} from ${bucketName}`);
+                
+                // Call process-gcs-batch endpoint with single image
+                const response = await fetch(`${PYTHON_SERVICE_URL}/process-gcs-batch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        image_paths: [imagePath], 
+                        bucket: bucketName, 
+                        options: {
+                            edge_detection: true,
+                            color_separation: true,
+                            grid_detection: true,
+                            quality_check: true,
+                            crop_to_content: false,
+                            color_method: 'lab'
+                        }
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Single image processing response:', data);
+                
+                if (data.success && data.results && data.results.length > 0) {
+                    const result = data.results[0];
+                    
+                    if (result.success) {
+                        // Store result for this image
+                        const processed = processedImages.get(groupKey) || { images: [], subImages: {} };
+                        
+                        // Check if this image is already in the list
+                        const existingIndex = processed.images.findIndex(img => 
+                            img.original_name === imageName || 
+                            img.name === imageName ||
+                            img.path === imagePath
+                        );
+                        
+                        const processedImage = {
+                            name: result.name || imageName,
+                            original_name: imageName,
+                            original_url: result.original_url || (imagePath ? `https://storage.googleapis.com/${bucketName}/${imagePath}` : ''),
+                            processed_url: result.processed_url || result.original_url || '',
+                            path: imagePath,
+                            bucket: bucketName,
+                            metrics: result.metrics || {},
+                            steps: result.steps || {},
+                            analysis: result.analysis || {},
+                            success: true,
+                            _raw: result
+                        };
+                        
+                        if (existingIndex >= 0) {
+                            processed.images[existingIndex] = processedImage;
+                        } else {
+                            processed.images.push(processedImage);
+                        }
+                        
+                        processedImages.set(groupKey, processed);
+                        
+                        // Update button
+                        btn.textContent = '✓ Done';
+                        btn.style.background = '#28a745';
+                        
+                        // Add view button
+                        const buttonContainer = btn.parentElement;
+                        if (!buttonContainer.querySelector('.view-single-result-btn')) {
+                            const viewBtn = document.createElement('button');
+                            viewBtn.className = 'view-single-result-btn';
+                            viewBtn.textContent = '👁️ View';
+                            viewBtn.style.cssText = 'padding: 0.4rem 0.8rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.75rem; flex: 1;';
+                            viewBtn.onclick = () => viewSingleImageResult(groupKey, imageName);
+                            buttonContainer.appendChild(viewBtn);
+                        }
+                        
+                        // Update image info to show processed badge
+                        const item = btn.closest('.gallery-item');
+                        if (item) {
+                            const infoDiv = item.querySelector('.gallery-item-info');
+                            if (infoDiv && !infoDiv.querySelector('span[style*="color: green"]')) {
+                                const badge = document.createElement('span');
+                                badge.style.cssText = 'color: green; font-size: 0.7rem; margin-left: 0.5rem;';
+                                badge.textContent = '✓ Processed';
+                                infoDiv.appendChild(badge);
+                            }
+                        }
+                        
+                        // Show success notification
+                        showSingleImageSuccessNotification(imageName);
+                        
+                        // Auto-open comparison modal
+                        setTimeout(() => {
+                            viewSingleImageResult(groupKey, imageName);
+                        }, 500);
+                        
+                        console.log(`✓ Successfully processed single image: ${imageName}`);
+                    } else {
+                        throw new Error(result.error || 'Processing failed');
+                    }
+                } else {
+                    throw new Error('No results returned or processing failed');
+                }
+            } catch (error) {
+                console.error('Error processing single image:', error);
+                btn.textContent = '❌ Failed';
+                btn.style.background = '#dc3545';
+                alert(`Failed to process image: ${error.message}`);
+            } finally {
+                // Re-enable button after a delay
+                setTimeout(() => {
+                    btn.disabled = false;
+                    if (btn.textContent === '❌ Failed') {
+                        btn.textContent = '⚡ Process';
+                        btn.style.background = 'var(--primary-color)';
+                    }
+                }, 3000);
+            }
+        };
+        
+        // View result for a single image
+        window.viewSingleImageResult = function(groupKey, imageName) {
+            const processed = processedImages.get(groupKey);
+            if (!processed || !processed.images || processed.images.length === 0) {
+                alert('No processed results available for this image.');
+                return;
+            }
+            
+            // Find the specific image
+            const processedImage = processed.images.find(img => 
+                img.original_name === imageName || 
+                img.name === imageName
+            );
+            
+            if (processedImage) {
+                // Create a temporary single-item array for the modal
+                const tempProcessed = {
+                    images: [processedImage],
+                    subImages: {}
+                };
+                
+                // Temporarily store it
+                const originalProcessed = processedImages.get(groupKey);
+                processedImages.set(groupKey, tempProcessed);
+                
+                // Open modal
+                openComparisonModal(groupKey, imageName);
+                
+                // Restore original after a moment (in case modal needs it)
+                setTimeout(() => {
+                    if (originalProcessed) {
+                        processedImages.set(groupKey, originalProcessed);
+                    }
+                }, 100);
+            } else {
+                alert('Processed result not found for this image.');
+            }
+        };
+        
+        // Show success notification for single image
+        function showSingleImageSuccessNotification(imageName) {
+            const existing = document.getElementById('single-image-notification');
+            if (existing) {
+                existing.remove();
+            }
+            
+            const notification = document.createElement('div');
+            notification.id = 'single-image-notification';
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                background: #28a745;
+                color: white;
+                padding: 0.75rem 1rem;
+                border-radius: 0.5rem;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                z-index: 10000;
+                animation: slideIn 0.3s ease-out;
+            `;
+            notification.innerHTML = `
+                <strong>✓ Image Processed!</strong><br>
+                <span style="font-size: 0.875rem;">${imageName}</span>
+            `;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.style.animation = 'slideOut 0.3s ease-out';
+                    setTimeout(() => notification.remove(), 300);
+                }
+            }, 3000);
+        }
+        
         // View processed results
         window.viewProcessedResults = function(groupKey) {
             const processed = processedImages.get(groupKey);
@@ -1129,7 +1500,6 @@
         let currentComparisonImages = [];
         let currentComparisonIndex = 0;
         let currentComparisonMetrics = {};
-        
         // Open comparison modal
         window.openComparisonModal = function(groupKey, imageName) {
             console.log('Opening comparison modal for:', groupKey, imageName);
@@ -1155,6 +1525,9 @@
             
             modal.style.display = 'block';
             modal.style.zIndex = '10000';
+            
+            // Set initial view mode
+            switchViewMode('side-by-side');
             
             // Find image index
             const imageIndex = currentComparisonImages.findIndex(img => 
@@ -1203,49 +1576,438 @@
             
             const current = currentComparisonImages[currentComparisonIndex];
             
-            // Update images
+            // Find the base image (-0001) for ground truth
+            // Extract the prefix (e.g., "1006427285" from "1006427285-0003.png")
+            let baseImageName = null;
+            let groundTruthUrl = null;
+            
+            if (current.original_name || current.name) {
+                const currentName = current.original_name || current.name;
+                const match = currentName.match(/^(\d+)-/);
+                if (match) {
+                    const prefix = match[1];
+                    baseImageName = `${prefix}-0001.png`;
+                    
+                    // Try to find the base image in the group
+                    const group = allGroups.find(g => g.key === currentComparisonGroup);
+                    if (group) {
+                        const baseImage = group.images.find(img => img.name === baseImageName || img.name.includes('-0001'));
+                        if (baseImage) {
+                            groundTruthUrl = baseImage.url || (baseImage.path ? `https://storage.googleapis.com/${baseImage.bucket || GCS_BUCKETS[0]}/${baseImage.path}` : null);
+                        }
+                    }
+                    
+                    // If not found in group, construct URL
+                    if (!groundTruthUrl && current.bucket) {
+                        const basePath = current.path ? current.path.replace(currentName, baseImageName) : `kaggle-data/physionet-ecg/train/${baseImageName}`;
+                        groundTruthUrl = `https://storage.googleapis.com/${current.bucket}/${basePath}`;
+                    }
+                }
+            }
+            
+            // Get original (unprocessed) image URL (the current image being processed)
+            const originalUrl = current.original_url || (current.path ? `https://storage.googleapis.com/${current.bucket || GCS_BUCKETS[0]}/${current.path}` : '');
+            const originalName = current.original_name || current.name || 'Original';
+            
+            // Get processed image URL - prefer base64 if available
+            let processedUrl = originalUrl;
+            if (current.processed_image_base64) {
+                processedUrl = `data:image/png;base64,${current.processed_image_base64}`;
+            } else if (current.processed_url && current.processed_url !== originalUrl) {
+                processedUrl = current.processed_url;
+            }
+            
+            // Update all three panels
+            // Panel 1: Ground Truth (-0001)
+            const groundTruthImg = document.getElementById('comparison-ground-truth');
+            const groundTruthName = document.getElementById('comparison-ground-truth-name');
+            if (groundTruthImg) {
+                groundTruthImg.src = groundTruthUrl || '';
+            }
+            if (groundTruthName) {
+                groundTruthName.textContent = baseImageName || 'Ground Truth';
+            }
+            
+            // Panel 2: Original (unprocessed current image)
             const originalImg = document.getElementById('comparison-original');
+            const originalNameEl = document.getElementById('comparison-original-name');
+            if (originalImg) {
+                originalImg.src = originalUrl;
+            }
+            if (originalNameEl) {
+                originalNameEl.textContent = originalName;
+            }
+            
+            // Panel 3: Processed
             const processedImg = document.getElementById('comparison-processed');
-            const originalName = document.getElementById('comparison-original-name');
-            const processedName = document.getElementById('comparison-processed-name');
-            
-            if (originalImg && current.original_url) {
-                originalImg.src = current.original_url;
+            const processedNameEl = document.getElementById('comparison-processed-name');
+            if (processedImg) {
+                processedImg.src = processedUrl;
             }
-            if (processedImg && current.processed_url) {
-                processedImg.src = current.processed_url;
-            }
-            if (originalName) {
-                originalName.textContent = current.original_name || current.name || 'Original';
-            }
-            if (processedName) {
-                processedName.textContent = current.processed_name || current.name || 'Processed';
+            if (processedNameEl) {
+                processedNameEl.textContent = originalName + ' (Processed)';
             }
             
-            // Update metrics
-            if (current.metrics) {
-                const snrEl = document.getElementById('metric-snr');
-                const typeEl = document.getElementById('metric-type');
-                const contrastEl = document.getElementById('metric-contrast');
-                const smudgesEl = document.getElementById('metric-smudges');
-                
-                if (snrEl && current.metrics.snr_db !== undefined) {
-                    snrEl.textContent = current.metrics.snr_db.toFixed(2);
+            // Update fade comparison images (View 2: Ground Truth vs Processed)
+            const fadeOriginal = document.getElementById('fade-original');
+            const fadeProcessed = document.getElementById('fade-processed');
+            const fadeContainer = document.querySelector('.fade-comparison-container');
+            
+            if (fadeOriginal) {
+                // Use ground truth for fade comparison
+                fadeOriginal.src = groundTruthUrl || originalUrl;
+            }
+            if (fadeProcessed) {
+                // Check if processed image is different from original
+                if (processedUrl && processedUrl !== originalUrl) {
+                    fadeProcessed.src = processedUrl;
+                    fadeProcessed.style.opacity = '0.5';
+                    fadeProcessed.style.display = 'block';
+                    if (fadeContainer) {
+                        fadeContainer.style.display = 'block';
+                        // Remove warning if it exists
+                        const warning = fadeContainer.querySelector('.fade-warning');
+                        if (warning) warning.remove();
+                    }
+                } else {
+                    // No processed image available yet - show warning
+                    fadeProcessed.style.display = 'none';
+                    if (fadeContainer) {
+                        fadeContainer.style.display = 'block';
+                        const warningMsg = fadeContainer.querySelector('.fade-warning');
+                        if (!warningMsg) {
+                            const warning = document.createElement('div');
+                            warning.className = 'fade-warning';
+                            warning.style.cssText = 'padding: 1rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; color: #856404; margin-top: 1rem;';
+                            warning.innerHTML = '<strong>ℹ️ Note:</strong> Processed image not available yet. Click "⚡ Process Image" button to generate the transformed version for comparison.';
+                            fadeContainer.appendChild(warning);
+                        }
+                    }
                 }
-                if (typeEl && current.metrics.image_type) {
-                    typeEl.textContent = current.metrics.image_type;
+            }
+            
+            // Reset slider to middle
+            const fadeSlider = document.getElementById('fade-slider');
+            if (fadeSlider) {
+                fadeSlider.value = 50;
+                updateFadePercentage(50);
+            }
+            
+            // Update processing stages
+            renderProcessingStages(current);
+            
+            // Update metrics - check both current.metrics and _raw.metrics
+            const metrics = current.metrics || current._raw?.metrics || {};
+            console.log('Metrics data:', metrics, 'Current object:', current);
+            
+            const snrTraceEl = document.getElementById('metric-snr-trace');
+            const snrEl = document.getElementById('metric-snr');
+            const typeEl = document.getElementById('metric-type');
+            const contrastEl = document.getElementById('metric-contrast');
+            const smudgesEl = document.getElementById('metric-smudges');
+            
+            // SNR for ECG trace only (not grid)
+            if (snrTraceEl) {
+                if (metrics.snr_trace_db !== undefined && metrics.snr_trace_db !== null) {
+                    snrTraceEl.textContent = metrics.snr_trace_db.toFixed(2);
+                } else if (metrics.snr_db !== undefined && metrics.snr_db !== null) {
+                    // Fallback to overall SNR if trace-specific not available
+                    snrTraceEl.textContent = metrics.snr_db.toFixed(2) + ' (overall)';
+                } else {
+                    snrTraceEl.textContent = '--';
                 }
-                if (contrastEl && current.metrics.contrast !== undefined) {
-                    contrastEl.textContent = current.metrics.contrast.toFixed(2);
+            }
+            
+            // Overall SNR
+            if (snrEl) {
+                if (metrics.snr_db !== undefined && metrics.snr_db !== null) {
+                    snrEl.textContent = metrics.snr_db.toFixed(2);
+                } else {
+                    snrEl.textContent = '--';
                 }
-                if (smudgesEl && current.metrics.smudges) {
-                    smudgesEl.textContent = current.metrics.smudges.qualitative || 
-                                          `${current.metrics.smudges.smudge_count} smudges`;
+            }
+            
+            if (typeEl) {
+                typeEl.textContent = metrics.image_type || '--';
+            }
+            
+            if (contrastEl) {
+                if (metrics.contrast !== undefined && metrics.contrast !== null) {
+                    contrastEl.textContent = metrics.contrast.toFixed(2);
+                } else if (metrics.contrast_std !== undefined && metrics.contrast_std !== null) {
+                    contrastEl.textContent = metrics.contrast_std.toFixed(2);
+                } else {
+                    contrastEl.textContent = '--';
+                }
+            }
+            
+            if (smudgesEl) {
+                if (metrics.smudges) {
+                    if (typeof metrics.smudges === 'string') {
+                        smudgesEl.textContent = metrics.smudges;
+                    } else if (metrics.smudges.qualitative) {
+                        smudgesEl.textContent = metrics.smudges.qualitative;
+                    } else if (metrics.smudges.smudge_count !== undefined) {
+                        smudgesEl.textContent = `${metrics.smudges.smudge_count} smudges`;
+                    } else {
+                        smudgesEl.textContent = 'Detected';
+                    }
+                } else {
+                    smudgesEl.textContent = '--';
                 }
             }
             
             // Update thumbnails
             renderThumbnails();
+            
+            // Update step-by-step view
+            updateStepByStepView(current);
+        }
+        
+        // View mode switching
+        let currentViewMode = 'side-by-side';
+        window.switchViewMode = function(mode) {
+            currentViewMode = mode;
+            
+            // Hide all views
+            document.querySelectorAll('.view-container').forEach(view => {
+                view.style.display = 'none';
+            });
+            
+            // Show selected view
+            const selectedView = document.getElementById(`view-${mode}`);
+            if (selectedView) {
+                selectedView.style.display = 'block';
+            }
+            
+            // Update button styles
+            document.querySelectorAll('.view-mode-btn').forEach(btn => {
+                if (btn.dataset.view === mode) {
+                    btn.style.background = 'var(--primary-color)';
+                    btn.classList.add('active');
+                } else {
+                    btn.style.background = '#6c757d';
+                    btn.classList.remove('active');
+                }
+            });
+        };
+        
+        // Step-by-step navigation
+        let currentStepIndex = 0;
+        let stepImages = [];
+        
+        function updateStepByStepView(current) {
+            // Build step images array from processing steps
+            stepImages = [];
+            
+            // Step 0: Original
+            if (current.original_url) {
+                stepImages.push({
+                    image: current.original_url,
+                    name: 'Original Image',
+                    description: 'The original ECG image before any processing.'
+                });
+            }
+            
+            // Add steps from processing pipeline
+            if (current.steps) {
+                if (current.steps.image_loading && current.steps.image_loading.image_loaded) {
+                    stepImages.push({
+                        image: current.original_url,
+                        name: 'Image Loaded',
+                        description: 'Image successfully loaded and ready for processing.'
+                    });
+                }
+                
+                if (current.steps.quality_gates) {
+                    stepImages.push({
+                        image: current.processed_url || current.original_url,
+                        name: 'Quality Check',
+                        description: `Quality gates passed. Blur score: ${current.steps.quality_gates.blur_score?.toFixed(1) || 'N/A'}, DPI: ${current.steps.quality_gates.dpi || 'N/A'}`
+                    });
+                }
+                
+                if (current.steps.color_separation) {
+                    stepImages.push({
+                        image: current.processed_url || current.original_url,
+                        name: 'Color Separation',
+                        description: `Separated ECG trace from grid using ${current.steps.color_separation.method || 'LAB'} color space.`
+                    });
+                }
+                
+                if (current.steps.edge_detection) {
+                    stepImages.push({
+                        image: current.processed_url || current.original_url,
+                        name: 'Edge Detection',
+                        description: `Detected ${current.steps.edge_detection.edge_pixels || 0} edge pixels using Canny edge detection.`
+                    });
+                }
+                
+                if (current.steps.grid_detection) {
+                    stepImages.push({
+                        image: current.processed_url || current.original_url,
+                        name: 'Grid Detection',
+                        description: `Detected grid lines: ${current.steps.grid_detection.fine_lines || 0} fine, ${current.steps.grid_detection.bold_lines || 0} bold.`
+                    });
+                }
+                
+                if (current.steps.smudge_removal) {
+                    stepImages.push({
+                        image: current.processed_url || current.original_url,
+                        name: 'Smudge Removal',
+                        description: `Removed ${current.steps.smudge_removal.smudge_count || 0} smudges from the image.`
+                    });
+                }
+            }
+            
+            // Final: Processed
+            if (current.processed_url && current.processed_url !== current.original_url) {
+                stepImages.push({
+                    image: current.processed_url,
+                    name: 'Final Processed Image',
+                    description: 'The final processed image after all transformations.'
+                });
+            }
+            
+            // Reset to first step
+            currentStepIndex = 0;
+            navigateStep(0);
+        }
+        
+        window.navigateStep = function(direction) {
+            if (stepImages.length === 0) return;
+            
+            currentStepIndex += direction;
+            if (currentStepIndex < 0) currentStepIndex = stepImages.length - 1;
+            if (currentStepIndex >= stepImages.length) currentStepIndex = 0;
+            
+            const step = stepImages[currentStepIndex];
+            const stepImage = document.getElementById('step-image');
+            const stepInfo = document.getElementById('step-info');
+            const stepDesc = document.getElementById('step-description');
+            
+            if (stepImage) stepImage.src = step.image;
+            if (stepInfo) stepInfo.textContent = `Step ${currentStepIndex + 1} of ${stepImages.length}: ${step.name}`;
+            if (stepDesc) stepDesc.innerHTML = `<p style="margin: 0; color: #666; font-weight: 500;">${step.description}</p>`;
+            
+            // Update button states
+            const stepPrev = document.getElementById('step-prev');
+            const stepNext = document.getElementById('step-next');
+            if (stepPrev) stepPrev.disabled = stepImages.length <= 1;
+            if (stepNext) stepNext.disabled = stepImages.length <= 1;
+        };
+        
+        // Render processing stages
+        function renderProcessingStages(current) {
+            const stagesList = document.getElementById('processing-stages-list');
+            if (!stagesList) return;
+            
+            const stages = [];
+            
+            // Check which stages ran based on the result data
+            if (current.steps) {
+                // Stage 1: Image Loading
+                if (current.steps.image_loading) {
+                    stages.push({
+                        name: 'Image Loading',
+                        status: current.steps.image_loading.image_loaded ? 'completed' : 'failed',
+                        details: current.steps.image_loading.image_loaded ? 'Image loaded successfully' : 'Failed to load image'
+                    });
+                }
+                
+                // Stage 2: Quality Gates
+                if (current.steps.quality_gates) {
+                    stages.push({
+                        name: 'Quality Check',
+                        status: current.steps.quality_gates.quality_passed ? 'completed' : 'failed',
+                        details: `Blur: ${current.steps.quality_gates.blur_score?.toFixed(1) || 'N/A'}, DPI: ${current.steps.quality_gates.dpi || 'N/A'}`
+                    });
+                }
+                
+                // Stage 3: Color Analysis
+                if (current.steps.color_analysis) {
+                    const hasRed = current.steps.color_analysis.has_red;
+                    const hasBlack = current.steps.color_analysis.has_black;
+                    const hasBoth = current.steps.color_analysis.has_both_colors;
+                    
+                    stages.push({
+                        name: 'Color Analysis',
+                        status: 'completed',
+                        details: hasBoth ? '✓ Red AND Black detected' : (hasRed ? 'Red detected' : hasBlack ? 'Black detected' : 'No color detected')
+                    });
+                }
+                
+                // Stage 4: Edge Detection
+                if (current.steps.edge_detection) {
+                    stages.push({
+                        name: 'Edge Detection',
+                        status: current.steps.edge_detection.edges_detected ? 'completed' : 'skipped',
+                        details: current.steps.edge_detection.edges_detected ? 
+                            `Found ${current.steps.edge_detection.edge_pixels || 0} edge pixels` : 'No edges detected'
+                    });
+                }
+                
+                // Stage 5: Color Separation
+                if (current.steps.color_separation) {
+                    const splitGenerated = current.steps.color_separation.split_images_generated;
+                    stages.push({
+                        name: 'Color Separation',
+                        status: 'completed',
+                        details: splitGenerated ? '✓ Split images generated (red & black)' : 
+                                `Method: ${current.steps.color_separation.method || 'lab'}, Trace: ${current.steps.color_separation.trace_pixels || 0}px`
+                    });
+                }
+                
+                // Stage 6: Grid Detection
+                if (current.steps.grid_detection) {
+                    stages.push({
+                        name: 'Grid Detection',
+                        status: current.steps.grid_detection.grid_detected ? 'completed' : 'skipped',
+                        details: current.steps.grid_detection.grid_detected ?
+                            `Fine: ${current.steps.grid_detection.fine_lines || 0}, Bold: ${current.steps.grid_detection.bold_lines || 0}` : 
+                            'No grid detected'
+                    });
+                }
+                
+                // Stage 7: Smudge Removal
+                if (current.steps.smudge_removal) {
+                    stages.push({
+                        name: 'Smudge Removal',
+                        status: current.steps.smudge_removal.smudges_detected ? 'completed' : 'skipped',
+                        details: current.steps.smudge_removal.smudges_detected ?
+                            `Removed ${current.steps.smudge_removal.smudge_count || 0} smudges` : 'No smudges found'
+                    });
+                }
+            }
+            
+            // If no stages data, show basic info
+            if (stages.length === 0) {
+                stages.push({
+                    name: 'Processing',
+                    status: current.success ? 'completed' : 'failed',
+                    details: current.success ? 'Processing completed' : (current.error || 'Processing failed')
+                });
+            }
+            
+            // Render stages
+            stagesList.innerHTML = stages.map(stage => {
+                const statusColor = stage.status === 'completed' ? '#28a745' : 
+                                   stage.status === 'failed' ? '#dc3545' : '#6c757d';
+                const statusIcon = stage.status === 'completed' ? '✓' : 
+                                  stage.status === 'failed' ? '✗' : '○';
+                
+                return `
+                    <div style="padding: 0.75rem; background: white; border-radius: 0.375rem; border-left: 3px solid ${statusColor};">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                            <span style="color: ${statusColor}; font-weight: bold;">${statusIcon}</span>
+                            <strong style="font-size: 0.875rem;">${stage.name}</strong>
+                        </div>
+                        <div style="font-size: 0.75rem; color: #666; margin-left: 1.5rem;">
+                            ${stage.details}
+                        </div>
+                    </div>
+                `;
+            }).join('');
         }
         
         // Render thumbnail strip
@@ -1257,19 +2019,42 @@
                 const isActive = index === currentComparisonIndex;
                 const thumbUrl = img.thumbnail_url || 
                                img.processed_url || 
-                               img.original_url || 
+                               img.original_url ||
                                (img.path ? `https://storage.googleapis.com/${img.bucket || GCS_BUCKETS[0]}/${img.path}` : '') ||
                                img.url;
+                const fileName = img.original_name || img.name || img.path?.split('/').pop() || 'Unknown';
+                // Escape HTML in filename for safety
+                const safeFileName = fileName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                 return `
                     <div class="thumbnail-item ${isActive ? 'active' : ''}" 
                          onclick="navigateToImage(${index})"
-                         style="cursor: pointer;">
-                        <img src="${thumbUrl}" alt="${img.name || 'Image'}" 
+                         style="cursor: pointer; position: relative;"
+                         title="${fileName}"
+                         onmouseenter="showThumbnailTooltip(event)"
+                         onmouseleave="hideThumbnailTooltip(event)">
+                        <img src="${thumbUrl}" alt="${fileName}" 
                              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 24 24\\'%3E%3Ctext x=\\'50%25\\' y=\\'50%25\\' text-anchor=\\'middle\\'%3E?%3C/text%3E%3C/svg%3E'">
+                        <div class="thumbnail-filename-tooltip">${safeFileName}</div>
                     </div>
                 `;
             }).join('');
         }
+        
+        // Show thumbnail tooltip on hover
+        window.showThumbnailTooltip = function(event, fileName) {
+            const tooltip = event.currentTarget.querySelector('.thumbnail-filename-tooltip');
+            if (tooltip) {
+                tooltip.style.display = 'block';
+            }
+        };
+        
+        // Hide thumbnail tooltip
+        window.hideThumbnailTooltip = function(event) {
+            const tooltip = event.currentTarget.querySelector('.thumbnail-filename-tooltip');
+            if (tooltip) {
+                tooltip.style.display = 'none';
+            }
+        };
         
         // Navigate to specific image
         window.navigateToImage = function(index) {
@@ -1280,13 +2065,175 @@
         };
         
         // Update overlays
+        // Update fade comparison
+        window.updateFadeComparison = function(value) {
+            const fadeProcessed = document.getElementById('fade-processed');
+            const fadePercentage = document.getElementById('fade-percentage');
+            
+            if (fadeProcessed) {
+                // Convert slider value (0-100) to opacity (0 = original, 100 = processed)
+                // At 0: show only original (processed opacity = 0)
+                // At 50: show both equally (processed opacity = 0.5)
+                // At 100: show only processed (processed opacity = 1)
+                const opacity = value / 100;
+                fadeProcessed.style.opacity = opacity;
+            }
+            
+            if (fadePercentage) {
+                updateFadePercentage(value);
+            }
+        };
+        
+        function updateFadePercentage(value) {
+            const fadePercentage = document.getElementById('fade-percentage');
+            if (fadePercentage) {
+                fadePercentage.textContent = value + '%';
+                // Color code: red for original, blue for processed
+                if (value < 50) {
+                    fadePercentage.style.color = '#667eea'; // More original
+                } else if (value > 50) {
+                    fadePercentage.style.color = '#764ba2'; // More processed
+                } else {
+                    fadePercentage.style.color = '#667eea'; // Equal
+                }
+            }
+        }
+        
         window.updateOverlays = function() {
             const showEdges = document.getElementById('toggle-edges')?.checked || false;
             const showSmudges = document.getElementById('toggle-smudges')?.checked || false;
             const showGrid = document.getElementById('toggle-grid')?.checked || false;
             
-            // TODO: Implement overlay rendering on images
             console.log('Overlays:', { showEdges, showSmudges, showGrid });
+            
+            // Get the current image elements
+            const leftImg = document.getElementById('comparison-left');
+            const groundTruthImg = document.getElementById('comparison-ground-truth');
+            
+            // Apply overlays to visible images
+            if (leftImg) {
+                applyOverlaysToImage(leftImg, showEdges, showSmudges, showGrid, 'left');
+            }
+            if (groundTruthImg) {
+                applyOverlaysToImage(groundTruthImg, showEdges, showSmudges, showGrid, 'ground-truth');
+            }
+        };
+        
+        // Apply overlays to an image element
+        function applyOverlaysToImage(imgElement, showEdges, showSmudges, showGrid, imageType) {
+            if (!imgElement || !imgElement.complete) {
+                // Wait for image to load
+                imgElement.onload = () => applyOverlaysToImage(imgElement, showEdges, showSmudges, showGrid, imageType);
+                return;
+            }
+            
+            // Get the current image data
+            const current = currentComparisonImages[currentComparisonIndex];
+            if (!current) return;
+            
+            // Create canvas overlay
+            const canvasId = `overlay-canvas-${imageType}`;
+            let canvas = document.getElementById(canvasId);
+            
+            const container = imgElement.parentElement;
+            if (!container) return;
+            
+            if (!canvas) {
+                canvas = document.createElement('canvas');
+                canvas.id = canvasId;
+                canvas.style.position = 'absolute';
+                canvas.style.top = '0';
+                canvas.style.left = '0';
+                canvas.style.pointerEvents = 'none';
+                canvas.style.zIndex = '10';
+                
+                container.style.position = 'relative';
+                container.appendChild(canvas);
+            }
+            
+            // Set canvas size to match image display size
+            const imgRect = imgElement.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            const imgDisplayWidth = imgElement.offsetWidth || imgRect.width;
+            const imgDisplayHeight = imgElement.offsetHeight || imgRect.height;
+            
+            canvas.width = imgDisplayWidth;
+            canvas.height = imgDisplayHeight;
+            canvas.style.width = imgDisplayWidth + 'px';
+            canvas.style.height = imgDisplayHeight + 'px';
+            
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // If no overlays, hide canvas
+            if (!showEdges && !showSmudges && !showGrid) {
+                canvas.style.display = 'none';
+                return;
+            }
+            
+            canvas.style.display = 'block';
+            
+            // Scale factor for drawing (account for image natural size vs display size)
+            const scaleX = canvas.width / (imgElement.naturalWidth || imgElement.width || 1);
+            const scaleY = canvas.height / (imgElement.naturalHeight || imgElement.height || 1);
+            
+            // Draw edges overlay
+            if (showEdges && current.steps && current.steps.edge_detection) {
+                ctx.strokeStyle = '#00ff00'; // Green for edges
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                // Draw bounding box if available
+                const bbox = current.steps.edge_detection.bounding_box;
+                if (bbox) {
+                    ctx.rect(
+                        bbox.x * scaleX,
+                        bbox.y * scaleY,
+                        bbox.width * scaleX,
+                        bbox.height * scaleY
+                    );
+                }
+                ctx.stroke();
+            }
+            
+            // Draw grid overlay
+            if (showGrid && current.steps && current.steps.grid_detection) {
+                ctx.strokeStyle = '#0000ff'; // Blue for grid
+                ctx.lineWidth = 1;
+                // Draw grid lines if available
+                const fineLines = current.steps.grid_detection.fine_lines || 0;
+                const boldLines = current.steps.grid_detection.bold_lines || 0;
+                
+                // Draw sample grid pattern (simplified)
+                const gridSpacing = Math.min(canvas.width, canvas.height) / 20;
+                ctx.beginPath();
+                for (let i = 0; i < canvas.width; i += gridSpacing) {
+                    ctx.moveTo(i, 0);
+                    ctx.lineTo(i, canvas.height);
+                }
+                for (let i = 0; i < canvas.height; i += gridSpacing) {
+                    ctx.moveTo(0, i);
+                    ctx.lineTo(canvas.width, i);
+                }
+                ctx.stroke();
+            }
+            
+            // Draw smudges overlay
+            if (showSmudges && current.metrics && current.metrics.smudges) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.3)'; // Red with transparency for smudges
+                // Draw smudge areas if available
+                const smudgeCount = current.metrics.smudges.smudge_count || 0;
+                if (smudgeCount > 0) {
+                    // Draw sample smudge indicators
+                    const radius = 10;
+                    for (let i = 0; i < Math.min(smudgeCount, 10); i++) {
+                        const x = (canvas.width / 10) * i + radius;
+                        const y = canvas.height / 2;
+                        ctx.beginPath();
+                        ctx.arc(x, y, radius, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                }
+            }
         };
         
         // Choose random group
@@ -1298,6 +2245,7 @@
             
             const randomIndex = Math.floor(Math.random() * allGroups.length);
             const randomGroup = allGroups[randomIndex];
+            currentSetIndex = randomIndex;
             
             // Update dropdown to show selected group
             const dropdown = document.getElementById('group-selector');
@@ -1309,6 +2257,79 @@
             scrollToGroup(randomGroup.key);
             
             console.log('Selected random group:', randomGroup.key);
+        };
+        
+        // Choose next set
+        window.chooseNextSet = function() {
+            if (allGroups.length === 0) {
+                alert('No groups available');
+                return;
+            }
+            
+            // Move to next set
+            currentSetIndex = (currentSetIndex + 1) % allGroups.length;
+            const nextGroup = allGroups[currentSetIndex];
+            
+            // Update dropdown to show selected group
+            const dropdown = document.getElementById('group-selector');
+            if (dropdown) {
+                dropdown.value = nextGroup.key;
+            }
+            
+            // Scroll to the selected group
+            scrollToGroup(nextGroup.key);
+            
+            console.log('Selected next set:', nextGroup.key, `(${currentSetIndex + 1}/${allGroups.length})`);
+        };
+        
+        // Add more sets to view
+        window.addMoreSets = function() {
+            // Load more groups
+            renderGroups();
+        };
+        
+        // Toggle collapse/expand for a group
+        window.toggleGroupCollapse = function(groupKey, event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            
+            if (collapsedGroups.has(groupKey)) {
+                collapsedGroups.delete(groupKey);
+            } else {
+                collapsedGroups.add(groupKey);
+            }
+            
+            // Find and toggle visibility of images in this group
+            const existingHeader = document.querySelector(`.gallery-group-header[data-group-key="${groupKey}"]`);
+            if (existingHeader) {
+                // Update collapse button icon
+                const collapseBtn = existingHeader.querySelector('button[onclick*="toggleGroupCollapse"]');
+                if (collapseBtn) {
+                    collapseBtn.textContent = collapsedGroups.has(groupKey) ? '▶' : '▼';
+                }
+                
+                // Show/hide images in this group
+                let nextSibling = existingHeader.nextSibling;
+                while (nextSibling) {
+                    const item = nextSibling;
+                    nextSibling = item.nextSibling;
+                    
+                    if (item.dataset && item.dataset.groupKey === groupKey) {
+                        // This is an image item in this group
+                        item.style.display = collapsedGroups.has(groupKey) ? 'none' : '';
+                    } else if (item.id && item.id.startsWith(`progress-${groupKey}`)) {
+                        // Progress indicator
+                        item.style.display = collapsedGroups.has(groupKey) ? 'none' : '';
+                    } else if (item.classList && item.classList.contains('gallery-group-header')) {
+                        // Reached next group, stop
+                        break;
+                    } else {
+                        // Unknown element, continue
+                        continue;
+                    }
+                }
+            }
         };
         
         // Scroll to a specific group
@@ -1460,11 +2481,21 @@
     <div class="gallery-container">
         <header>
             <h1>ECG Image Gallery</h1>
-            <div style="margin-top: 10px; display: flex; gap: 1rem; align-items: center;">
+            <div style="margin-top: 10px; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
                 <a href="/index.html" style="color: var(--primary-color); text-decoration: underline;">← Back to Upload</a>
                 <button id="choose-random-btn" onclick="chooseRandomGroup()" 
                         style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;">
                     🎲 Choose Random Set
+                </button>
+                <button id="choose-next-btn" onclick="chooseNextSet()" 
+                        style="padding: 0.5rem 1rem; background: #17a2b8; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;"
+                        title="Navigate to the next set">
+                    ⏭️ Next Set
+                </button>
+                <button id="add-more-sets-btn" onclick="addMoreSets()" 
+                        style="padding: 0.5rem 1rem; background: #28a745; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;"
+                        title="Load more sets">
+                    ➕ Add More Sets
                 </button>
             </div>
         </header>
@@ -1499,24 +2530,97 @@
             <!-- Thumbnail Strip -->
             <div class="thumbnail-strip" id="thumbnail-strip"></div>
             
+            <!-- View Mode Selector -->
+            <div class="view-mode-selector" style="margin: 1rem 0; padding: 1rem; background: #f8f9fa; border-radius: 0.5rem; display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap;">
+                <button class="view-mode-btn active" data-view="side-by-side" onclick="switchViewMode('side-by-side')" 
+                        style="padding: 0.75rem 1.5rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-weight: 500;">
+                    📊 View 1: Side-by-Side
+                </button>
+                <button class="view-mode-btn" data-view="fade" onclick="switchViewMode('fade')"
+                        style="padding: 0.75rem 1.5rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-weight: 500;">
+                    🔀 View 2: Fade Comparison
+                </button>
+                <button class="view-mode-btn" data-view="step-by-step" onclick="switchViewMode('step-by-step')"
+                        style="padding: 0.75rem 1.5rem; background: #6c757d; color: white; border: none; border-radius: 0.375rem; cursor: pointer; font-weight: 500;">
+                    🔄 View 3: Step-by-Step
+                </button>
+            </div>
+            
             <!-- Main Comparison Area -->
             <div class="comparison-main">
                 <!-- Navigation Arrows -->
                 <button class="nav-arrow nav-left" onclick="navigateImage(-1)">←</button>
                 <button class="nav-arrow nav-right" onclick="navigateImage(1)">→</button>
                 
-                <!-- Image Display -->
-                <div class="comparison-images">
-                    <div class="image-panel">
+                <!-- View 1: Side-by-Side All 3 Images -->
+                <div id="view-side-by-side" class="view-container">
+                    <div class="comparison-images" style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+                    <div class="image-panel" id="panel-ground-truth" style="flex: 1; min-width: 250px; max-width: 33%;">
+                        <h3>Ground Truth</h3>
+                        <img id="comparison-ground-truth" src="" alt="Ground Truth" style="width: 100%; height: auto; border-radius: 0.5rem;">
+                        <p id="comparison-ground-truth-name" class="image-name"></p>
+                    </div>
+                    <div class="image-panel" id="panel-original" style="flex: 1; min-width: 250px; max-width: 33%;">
                         <h3>Original</h3>
-                        <img id="comparison-original" src="" alt="Original">
+                        <img id="comparison-original" src="" alt="Original" style="width: 100%; height: auto; border-radius: 0.5rem;">
                         <p id="comparison-original-name" class="image-name"></p>
                     </div>
-                    <div class="image-panel">
+                    <div class="image-panel" id="panel-processed" style="flex: 1; min-width: 250px; max-width: 33%;">
                         <h3>Processed</h3>
-                        <img id="comparison-processed" src="" alt="Processed">
+                        <img id="comparison-processed" src="" alt="Processed" style="width: 100%; height: auto; border-radius: 0.5rem;">
                         <p id="comparison-processed-name" class="image-name"></p>
                     </div>
+                </div>
+                </div>
+                
+                <!-- View 2: Fade Comparison (Ground Truth vs Processed) -->
+                <div id="view-fade" class="view-container" style="display: none;">
+                    <div class="fade-comparison-container" style="margin-top: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 0.5rem;">
+                    <h3 style="margin-top: 0; margin-bottom: 1rem;">🔀 Before/After Fade Comparison</h3>
+                    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                        <span style="font-weight: 500; color: #333;">Original</span>
+                        <input type="range" id="fade-slider" min="0" max="100" value="50" 
+                               style="flex: 1; height: 8px; border-radius: 4px; background: linear-gradient(to right, #667eea 0%, #764ba2 100%); outline: none;"
+                               oninput="updateFadeComparison(this.value)">
+                        <span style="font-weight: 500; color: #333;">Processed</span>
+                        <span id="fade-percentage" style="min-width: 50px; text-align: center; font-weight: bold; color: #667eea;">50%</span>
+                    </div>
+                    <div class="fade-image-container" style="position: relative; width: 100%; max-width: 800px; margin: 0 auto; border: 2px solid #ddd; border-radius: 8px; overflow: hidden; background: #fff;">
+                        <img id="fade-original" src="" alt="Original" 
+                             style="width: 100%; height: auto; display: block; position: relative; z-index: 1;">
+                        <img id="fade-processed" src="" alt="Processed" 
+                             style="width: 100%; height: auto; display: block; position: absolute; top: 0; left: 0; z-index: 2; opacity: 0.5;">
+                    </div>
+                    <div style="text-align: center; margin-top: 0.5rem; font-size: 0.875rem; color: #666;">
+                        <span>Drag slider to fade between ground truth and processed images</span>
+                    </div>
+                    </div>
+                </div>
+                
+                <!-- View 3: Step-by-Step Transformation -->
+                <div id="view-step-by-step" class="view-container" style="display: none;">
+                    <div class="step-by-step-container" style="margin-top: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 0.5rem;">
+                        <h3 style="margin-top: 0; margin-bottom: 1rem;">🔄 Step-by-Step Transformation</h3>
+                        <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                            <button id="step-prev" onclick="navigateStep(-1)" style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer;">← Previous</button>
+                            <span id="step-info" style="flex: 1; text-align: center; font-weight: 500;">Step 1 of 8</span>
+                            <button id="step-next" onclick="navigateStep(1)" style="padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.375rem; cursor: pointer;">Next →</button>
+                        </div>
+                        <div id="step-image-container" style="width: 100%; max-width: 800px; margin: 0 auto; border: 2px solid #ddd; border-radius: 8px; overflow: hidden; background: #fff;">
+                            <img id="step-image" src="" alt="Processing Step" style="width: 100%; height: auto; display: block;">
+                        </div>
+                        <div id="step-description" style="text-align: center; margin-top: 1rem; padding: 1rem; background: white; border-radius: 0.5rem;">
+                            <p style="margin: 0; color: #666;">Loading step information...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Processing Stages Panel -->
+            <div class="processing-stages-panel" style="margin-bottom: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 0.5rem;">
+                <h3 style="margin-top: 0;">Processing Stages</h3>
+                <div id="processing-stages-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
+                    <!-- Stages will be populated dynamically -->
                 </div>
             </div>
             
@@ -1525,7 +2629,12 @@
                 <h3>Metrics</h3>
                 <div class="metrics-grid">
                     <div class="metric-item">
-                        <label>SNR:</label>
+                        <label>SNR (ECG Trace Only):</label>
+                        <span id="metric-snr-trace">--</span> dB
+                        <small style="display: block; color: #666; font-size: 0.75rem; margin-top: 0.25rem;">Signal-to-noise ratio for ECG trace (excluding grid)</small>
+                    </div>
+                    <div class="metric-item">
+                        <label>SNR (Overall):</label>
                         <span id="metric-snr">--</span> dB
                     </div>
                     <div class="metric-item">
@@ -1543,7 +2652,7 @@
                 </div>
                 
                 <!-- Toggle Overlays -->
-                <div class="overlay-toggles">
+                <div class="overlay-toggles" style="margin-top: 1rem;">
                     <label><input type="checkbox" id="toggle-edges" onchange="updateOverlays()"> Show Edges</label>
                     <label><input type="checkbox" id="toggle-smudges" onchange="updateOverlays()"> Show Smudges</label>
                     <label><input type="checkbox" id="toggle-grid" onchange="updateOverlays()"> Show Grid</label>
@@ -1617,6 +2726,42 @@
             object-fit: cover;
         }
         
+        .thumbnail-item {
+            position: relative;
+        }
+        
+        .thumbnail-filename-tooltip {
+            display: none;
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            margin-bottom: 8px;
+            padding: 0.5rem 0.75rem;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            z-index: 10001;
+            pointer-events: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            max-width: 250px;
+            word-break: break-all;
+            white-space: normal;
+            text-align: center;
+            line-height: 1.4;
+        }
+        
+        .thumbnail-filename-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 5px solid transparent;
+            border-top-color: rgba(0, 0, 0, 0.9);
+        }
+        
         .comparison-main {
             position: relative;
             margin-bottom: 2rem;
@@ -1646,26 +2791,57 @@
         }
         
         .comparison-images {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 2rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        @media (max-width: 1200px) {
+            .comparison-images {
+                flex-direction: column;
+                align-items: center;
+            }
+            .image-panel {
+                max-width: 100% !important;
+            }
+        }
+        
+        .image-panel.hidden {
+            display: none;
         }
         
         .image-panel {
             text-align: center;
+            position: relative;
+            flex: 1;
+            min-width: 250px;
+            max-width: 33%;
         }
         
         .image-panel img {
-            max-width: 100%;
+            width: 100%;
+            height: auto;
             max-height: 500px;
             border: 1px solid #ddd;
             border-radius: 0.5rem;
+            display: block;
+            margin: 0 auto;
         }
         
         .image-name {
             margin-top: 0.5rem;
             font-size: 0.875rem;
             color: #666;
+        }
+        
+        .view-container {
+            width: 100%;
+        }
+        
+        .view-mode-btn.active {
+            background: var(--primary-color) !important;
+            font-weight: bold;
         }
         
         .metrics-panel {

@@ -9,7 +9,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
         import { getAuth, GoogleAuthProvider } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
-        import { getStorage } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+        // Removed Firebase Storage - using Google Cloud Storage (GCS) instead
         import { getFirestore } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
         import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';
         
@@ -26,7 +26,7 @@
         try {
             const app = initializeApp(firebaseConfig);
             window.auth = getAuth(app);
-            window.storage = getStorage(app);
+            // Removed Firebase Storage - using Google Cloud Storage (GCS) instead
             window.db = getFirestore(app);
             window.functions = getFunctions(app);
             console.log('Firebase initialized successfully');
@@ -43,7 +43,8 @@
             <div style="margin-top: 10px; font-size: 0.9em;">
                 <a href="/gallery.html" style="color: white; text-decoration: underline; margin-right: 15px; font-weight: bold;">📸 Gallery</a>
                 <a href="/training_viewer.html" style="color: white; text-decoration: underline; margin-right: 15px;">Training Viewer</a>
-                <a href="/digitization_test.html" style="color: white; text-decoration: underline;">Test Digitization</a>
+                <a href="/digitization_test.html" style="color: white; text-decoration: underline; margin-right: 15px;">Test Digitization</a>
+                <a href="/test_ecg.html" style="color: white; text-decoration: underline; font-weight: bold;">🧪 Try It Now</a>
             </div>
             <div class="auth-section">
                 <div id="auth-status" class="auth-status"></div>

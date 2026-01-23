@@ -91,11 +91,18 @@ def process_pipeline_step(step_id: int, method_id: str, image: np.ndarray, previ
             gates = QualityGates()
             quality_result = gates.check_all(image)
             
+            # Quality result structure: {'passed': ..., 'results': {'blur': {...}, ...}}
+            quality_results = quality_result.get('results', quality_result)
+            blur_data = quality_results.get('blur', {})
+            resolution_data = quality_results.get('resolution', {})
+            contrast_data = quality_results.get('contrast', {})
+            grid_data = quality_results.get('grid_detectability', {})
+            
             result['metrics'] = {
-                'blur_score': quality_result['blur']['score'],
-                'dpi': quality_result['resolution'].get('estimated_dpi', 0),
-                'contrast_std': quality_result['contrast']['std'],
-                'grid_lines_count': quality_result['grid_detectability']['detected_lines']
+                'blur_score': float(blur_data.get('variance', blur_data.get('score', 0))),
+                'dpi': float(resolution_data.get('estimated_dpi', resolution_data.get('dpi', 0))),
+                'contrast_std': float(contrast_data.get('std', 0)),
+                'grid_lines_count': int(grid_data.get('detected_lines', 0))
             }
             result['output_image'] = image  # Pass through
             result['quality_passed'] = quality_result['passed']
@@ -386,26 +393,35 @@ def process_pipeline_step(step_id: int, method_id: str, image: np.ndarray, previ
 if FLASK_AVAILABLE:
     app = Flask(__name__)
     
-    # Enable CORS for all routes
+    # Enable CORS for all routes - use wildcard to allow all origins
     if CORS_AVAILABLE:
-        CORS(app, origins=["https://hv-ecg.web.app", "http://localhost:*"], supports_credentials=True)
+        CORS(app, 
+             resources={r"/*": {
+                 "origins": "*",
+                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                 "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+                 "max_age": 3600
+             }},
+             supports_credentials=False)
     else:
         # Manual CORS headers if flask-cors not available
         @app.after_request
         def after_request(response):
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, OPTIONS'
+            response.headers['Access-Control-Max-Age'] = '3600'
             return response
         
         @app.before_request
         def handle_preflight():
             if request.method == "OPTIONS":
                 response = jsonify({'status': 'ok'})
-                response.headers.add('Access-Control-Allow-Origin', '*')
-                response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-                response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-                return response
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+                response.headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, OPTIONS'
+                response.headers['Access-Control-Max-Age'] = '3600'
+                return response, 200
     
     @app.route('/transform-multi', methods=['POST'])
     def transform_multi():
@@ -1213,10 +1229,14 @@ if FLASK_AVAILABLE:
                     if options.get('quality_check', False):
                         gates = QualityGates()
                         quality_result = gates.check_all(image)
+                        quality_results = quality_result.get('results', quality_result)
+                        blur_data = quality_results.get('blur', {})
+                        resolution_data = quality_results.get('resolution', {})
+                        
                         result['steps']['quality_check'] = {
                             'passed': quality_result.get('passed', False),
-                            'blur_score': float(quality_result.get('blur', {}).get('score', 0)),
-                            'dpi': float(quality_result.get('resolution', {}).get('estimated_dpi', 0)),
+                            'blur_score': float(blur_data.get('variance', blur_data.get('score', 0))),
+                            'dpi': float(resolution_data.get('estimated_dpi', resolution_data.get('dpi', 0))),
                             'warnings': quality_result.get('warnings', [])
                         }
                     
@@ -1298,7 +1318,9 @@ if FLASK_AVAILABLE:
             
             if not TRANSFORMERS_AVAILABLE:
                 response = jsonify({'error': 'Transformers not available'})
-                response.headers.add('Access-Control-Allow-Origin', '*')
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
                 return response, 500
             
             from transformers.edge_detector import detect_edges, crop_to_content
@@ -1313,17 +1335,23 @@ if FLASK_AVAILABLE:
             
             if not image_paths:
                 response = jsonify({'error': 'image_paths array required'})
-                response.headers.add('Access-Control-Allow-Origin', '*')
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
                 return response, 400
             
             if not bucket_name:
                 response = jsonify({'error': 'bucket name required'})
-                response.headers.add('Access-Control-Allow-Origin', '*')
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
                 return response, 400
             
             if len(image_paths) > 20:
                 response = jsonify({'error': 'Maximum 20 images per batch'})
-                response.headers.add('Access-Control-Allow-Origin', '*')
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
                 return response, 400
             
             # Initialize GCS client
@@ -1333,15 +1361,57 @@ if FLASK_AVAILABLE:
             def download_and_process_image(i, image_path):
                 """Download image from GCS and process it"""
                 try:
-                    # Download from GCS
-                    blob = bucket.blob(image_path)
-                    if not blob.exists():
-                        return {
-                            'index': i,
-                            'success': False,
-                            'error': f'Image not found: {image_path}',
-                            'path': image_path
-                        }
+                    # Try different path formats if the first doesn't work
+                    possible_paths = [
+                        image_path,  # Original path
+                        image_path.lstrip('/'),  # Remove leading slash
+                        image_path.replace('kaggle-data/', ''),  # Remove prefix
+                        f'kaggle-data/{image_path}',  # Add prefix
+                    ]
+                    
+                    blob = None
+                    actual_path = None
+                    
+                    for path in possible_paths:
+                        test_blob = bucket.blob(path)
+                        if test_blob.exists():
+                            blob = test_blob
+                            actual_path = path
+                            break
+                    
+                    if blob is None:
+                        # Try listing files to find the correct path
+                        # Extract filename from path
+                        filename = image_path.split('/')[-1]
+                        # Search in bucket with different prefixes
+                        search_prefixes = [
+                            filename,  # Just filename
+                            f'kaggle-data/{filename}',  # With prefix
+                            f'kaggle-data/physionet-ecg/**/{filename}',  # With wildcard
+                        ]
+                        
+                        for prefix in search_prefixes:
+                            try:
+                                blobs = list(bucket.list_blobs(prefix=prefix.replace('**/', ''), max_results=10))
+                                # Filter to exact filename match
+                                matching_blobs = [b for b in blobs if b.name.endswith(filename)]
+                                if matching_blobs:
+                                    blob = matching_blobs[0]
+                                    actual_path = blob.name
+                                    print(f"Found image at: {actual_path} (searched for: {image_path})")
+                                    break
+                            except Exception as e:
+                                print(f"Error searching with prefix {prefix}: {e}")
+                                continue
+                        
+                        if blob is None:
+                            return {
+                                'index': i,
+                                'success': False,
+                                'error': f'Image not found: {image_path} (filename: {filename})',
+                                'path': image_path,
+                                'bucket': bucket_name
+                            }
                     
                     image_bytes = blob.download_as_bytes()
                     nparr = np.frombuffer(image_bytes, np.uint8)
@@ -1437,11 +1507,18 @@ if FLASK_AVAILABLE:
                     if options.get('quality_check', False):
                         gates = QualityGates()
                         quality_result = gates.check_all(image)
+                        # Quality result structure: {'passed': ..., 'results': {'blur': {...}, 'resolution': {...}, ...}}
+                        quality_results = quality_result.get('results', quality_result)  # Fallback to top-level if nested
+                        blur_data = quality_results.get('blur', {})
+                        resolution_data = quality_results.get('resolution', {})
+                        contrast_data = quality_results.get('contrast', {})
+                        grid_data = quality_results.get('grid_detectability', {})
+                        
                         result['metrics'] = {
-                            'blur_score': float(quality_result['blur']['score']),
-                            'dpi': float(quality_result['resolution'].get('estimated_dpi', 0)),
-                            'contrast_std': float(quality_result['contrast']['std']),
-                            'grid_lines_count': int(quality_result['grid_detectability']['detected_lines'])
+                            'blur_score': float(blur_data.get('variance', blur_data.get('score', 0))),
+                            'dpi': float(resolution_data.get('estimated_dpi', resolution_data.get('dpi', 0))),
+                            'contrast_std': float(contrast_data.get('std', 0)),
+                            'grid_lines_count': int(grid_data.get('detected_lines', 0))
                         }
                     
                     return result
@@ -1478,7 +1555,9 @@ if FLASK_AVAILABLE:
                 'bucket': bucket_name,
                 'results': results
             })
-            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
             return response
             
         except Exception as e:
@@ -1651,11 +1730,17 @@ if FLASK_AVAILABLE:
             if options.get('quality_check', False):
                 gates = QualityGates()
                 quality_result = gates.check_all(processed_image)
+                quality_results = quality_result.get('results', quality_result)
+                blur_data = quality_results.get('blur', {})
+                resolution_data = quality_results.get('resolution', {})
+                contrast_data = quality_results.get('contrast', {})
+                grid_data = quality_results.get('grid_detectability', {})
+                
                 result['metrics'] = {
-                    'blur_score': float(quality_result['blur']['score']),
-                    'dpi': float(quality_result['resolution'].get('estimated_dpi', 0)),
-                    'contrast_std': float(quality_result['contrast']['std']),
-                    'grid_lines_count': int(quality_result['grid_detectability']['detected_lines'])
+                    'blur_score': float(blur_data.get('variance', blur_data.get('score', 0))),
+                    'dpi': float(resolution_data.get('estimated_dpi', resolution_data.get('dpi', 0))),
+                    'contrast_std': float(contrast_data.get('std', 0)),
+                    'grid_lines_count': int(grid_data.get('detected_lines', 0))
                 }
             
             # SNR calculation (if base image provided)
@@ -1687,9 +1772,11 @@ if FLASK_AVAILABLE:
             response.headers.add('Access-Control-Allow-Origin', '*')
             return response, 500
     
-    # Run Flask app if executed directly
+    # Run Flask app if executed directly (for Cloud Run)
     if __name__ == '__main__':
-        app.run(host='0.0.0.0', port=8080, debug=False)
+        import os
+        port = int(os.environ.get('PORT', 8080))
+        app.run(host='0.0.0.0', port=port, debug=False)
 
 def process_ecg_image(request):
     """

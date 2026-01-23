@@ -8,10 +8,7 @@ import {
     collection, 
     getDocs 
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-import { 
-    ref, 
-    getDownloadURL 
-} from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+// Removed Firebase Storage - using Google Cloud Storage (GCS) URLs directly
 import { 
     httpsCallable 
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';

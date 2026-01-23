@@ -6,11 +6,7 @@ import {
     onAuthStateChanged, 
     signOut 
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
-import { 
-    ref, 
-    uploadBytesResumable, 
-    getDownloadURL 
-} from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+// Removed Firebase Storage - using Google Cloud Storage (GCS) instead
 import { 
     collection, 
     addDoc, 
@@ -379,7 +375,9 @@ async function uploadFiles() {
                 fileName: selectedFiles[i].name,
                 fileSize: selectedFiles[i].size,
                 fileType: selectedFiles[i].type,
-                storagePath: `ecg_images/${currentUser.uid}/${recordId_doc}/${selectedFiles[i].name}`,
+                storagePath: `user-uploads/${currentUser.uid}/${recordId_doc}/${selectedFiles[i].name}`,
+                gcsBucket: 'ecg-competition-data-1',
+                gcsPath: `user-uploads/${currentUser.uid}/${recordId_doc}/${selectedFiles[i].name}`,
                 downloadUrl: imageUrls[i],
                 uploadedAt: serverTimestamp()
             });
@@ -402,30 +400,39 @@ async function uploadFiles() {
     }
 }
 
-function uploadFile(file, userId, recordId, index) {
-    return new Promise((resolve, reject) => {
-        const storagePath = `ecg_images/${userId}/${recordId}/${file.name}`;
-        const storageRef = ref(window.storage, storagePath);
-        const uploadTask = uploadBytesResumable(storageRef, file);
+async function uploadFile(file, userId, recordId, index) {
+    try {
+        // Get signed URL for GCS upload
+        const getGCSUploadUrl = httpsCallable(window.functions, 'getGCSUploadUrl');
+        const { data: uploadData } = await getGCSUploadUrl({
+            fileName: file.name,
+            recordId: recordId,
+            contentType: file.type
+        });
 
-        uploadTask.on(
-            'state_changed',
-            (snapshot) => {
-                // Individual file progress could be tracked here
-            },
-            (error) => {
-                reject(error);
-            },
-            async () => {
-                try {
-                    const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-                    resolve(downloadURL);
-                } catch (error) {
-                    reject(error);
-                }
+        if (!uploadData.success || !uploadData.uploadUrl) {
+            throw new Error('Failed to get upload URL');
+        }
+
+        // Upload directly to GCS using signed URL
+        const response = await fetch(uploadData.uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: {
+                'Content-Type': file.type
             }
-        );
-    });
+        });
+
+        if (!response.ok) {
+            throw new Error(`Upload failed: ${response.statusText}`);
+        }
+
+        // Return the public GCS URL
+        return uploadData.publicUrl;
+    } catch (error) {
+        console.error('Error uploading file to GCS:', error);
+        throw error;
+    }
 }
 
 // Bulk Upload functionality

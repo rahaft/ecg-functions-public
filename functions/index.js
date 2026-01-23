@@ -61,10 +61,14 @@ exports.processECGImage = functions
     return null;
   }
 
-  // Parse the file path: ecg_images/{userId}/{recordId}/{fileName}
+  // Parse the file path: user-uploads/{userId}/{recordId}/{fileName} (GCS)
+  // Also support legacy: ecg_images/{userId}/{recordId}/{fileName} (Firebase Storage)
   const pathParts = filePath.split('/');
-  if (pathParts.length < 4 || pathParts[0] !== 'ecg_images') {
-    console.log('Invalid file path structure:', filePath);
+  const isGCS = pathParts[0] === 'user-uploads';
+  const isLegacy = pathParts[0] === 'ecg_images';
+  
+  if (pathParts.length < 4 || (!isGCS && !isLegacy)) {
+    console.log('Invalid file path structure (not user-uploads or ecg_images):', filePath);
     return null;
   }
 
@@ -95,8 +99,11 @@ exports.processECGImage = functions
       lastProcessed: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Download the image from Storage
-    const bucket = getStorage().bucket(object.bucket || admin.app().options.storageBucket);
+    // Download the image from Storage (GCS or Firebase Storage)
+    // If it's a GCS bucket, use the bucket name from the object
+    // Otherwise use the default Firebase Storage bucket
+    const bucketName = isGCS ? (object.bucket || 'ecg-competition-data-1') : (object.bucket || admin.app().options.storageBucket);
+    const bucket = getStorage().bucket(bucketName);
     const file = bucket.file(filePath);
     const [imageBuffer] = await file.download();
 
@@ -932,6 +939,65 @@ exports.analyzeFit = functions
       
     } catch (error) {
       console.error('Error in fit analysis:', error);
+      throw new functions.https.HttpsError('internal', error.message);
+    }
+  });
+
+/**
+ * Process image with all transformation methods and compare results
+ * Tests: Barrel, Polynomial, TPS, Perspective transformations
+ */
+/**
+ * Generate signed URL for uploading to GCS
+ * Uses existing GCS bucket with user-uploads subfolder
+ */
+exports.getGCSUploadUrl = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    // Verify authentication
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+
+    try {
+      const { fileName, recordId, contentType } = data || {};
+      
+      if (!fileName || !recordId) {
+        throw new functions.https.HttpsError('invalid-argument', 'fileName and recordId are required');
+      }
+
+      const userId = context.auth.uid;
+      
+      // Use existing GCS bucket with user-uploads subfolder
+      const bucketName = 'ecg-competition-data-1'; // Use first bucket
+      const filePath = `user-uploads/${userId}/${recordId}/${fileName}`;
+      
+      const storage = getStorage();
+      const bucket = storage.bucket(bucketName);
+      const file = bucket.file(filePath);
+      
+      // Generate signed URL for upload (write permission)
+      const expiresIn = Date.now() + 3600000; // 1 hour
+      const [url] = await file.getSignedUrl({
+        action: 'write',
+        expires: expiresIn,
+        version: 'v4',
+        contentType: contentType || 'image/png'
+      });
+      
+      // Return the signed URL and the public URL after upload
+      const publicUrl = `https://storage.googleapis.com/${bucketName}/${filePath}`;
+      
+      return {
+        success: true,
+        uploadUrl: url,
+        publicUrl: publicUrl,
+        bucket: bucketName,
+        path: filePath,
+        expiresIn: 3600
+      };
+    } catch (error) {
+      console.error('Error generating GCS upload URL:', error);
       throw new functions.https.HttpsError('internal', error.message);
     }
   });

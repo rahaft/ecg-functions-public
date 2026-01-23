@@ -8,15 +8,76 @@ This can be deployed as:
 3. Local processing with Firebase Admin SDK
 """
 
+print("=" * 70)
+print("STEP 4: Loading digitization_pipeline.py")
+print("=" * 70)
+print("File: functions_python/digitization_pipeline.py")
+print("Status: Starting...")
+
 import numpy as np
 import cv2
 from scipy import signal
 from scipy.ndimage import gaussian_filter1d, median_filter
 from typing import Dict, List, Tuple, Optional
 import json
-from grid_detection import GridDetector
-from segmented_processing import SegmentedProcessor
-from line_visualization import LineVisualizer
+
+# STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
+
+# Import classes from previous cells (they're in global namespace, not modules)
+# Try to get from global namespace first (from previous cells)
+# Then fall back to module import (if files were uploaded)
+
+print("\n[Step 4.1] Loading GridDetector...")
+try:
+    # First try: Get from global namespace (Cell 1)
+    if 'GridDetector' in globals():
+        GridDetector = globals()['GridDetector']
+        print("  ✓ Success: Loaded GridDetector from Cell 1 (grid_detection.py)")
+    else:
+        # Second try: Import as module (if file was uploaded)
+        from grid_detection import GridDetector
+        print("  ✓ Success: Imported GridDetector from grid_detection module")
+except Exception as e:
+    print(f"  ✗ ERROR: Could not load GridDetector: {e}")
+    print("  → Make sure Cell 1 (grid_detection.py) ran successfully!")
+    print("  → Check that you see 'STEP 1: ... SUCCESS' message from Cell 1")
+    raise
+
+print("\n[Step 4.2] Loading SegmentedProcessor...")
+try:
+    if 'SegmentedProcessor' in globals():
+        SegmentedProcessor = globals()['SegmentedProcessor']
+        print("  ✓ Success: Loaded SegmentedProcessor from Cell 2 (segmented_processing.py)")
+    else:
+        from segmented_processing import SegmentedProcessor
+        print("  ✓ Success: Imported SegmentedProcessor from segmented_processing module")
+except Exception as e:
+    print(f"  ✗ ERROR: Could not load SegmentedProcessor: {e}")
+    print("  → Make sure Cell 2 (segmented_processing.py) ran successfully!")
+    print("  → Check that you see 'STEP 2: ... SUCCESS' message from Cell 2")
+    raise
+
+print("\n[Step 4.3] Loading LineVisualizer...")
+try:
+    if 'LineVisualizer' in globals():
+        LineVisualizer = globals()['LineVisualizer']
+        print("  ✓ Success: Loaded LineVisualizer from Cell 3 (line_visualization.py)")
+    else:
+        from line_visualization import LineVisualizer
+        print("  ✓ Success: Imported LineVisualizer from line_visualization module")
+except Exception as e:
+    print(f"  ✗ ERROR: Could not load LineVisualizer: {e}")
+    print("  → Make sure Cell 3 (line_visualization.py) ran successfully!")
+    print("  → Check that you see 'STEP 3: ... SUCCESS' message from Cell 3")
+    raise
+
+# STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
+
+print("\n" + "=" * 70)
+print("STEP 4: All dependencies loaded successfully!")
+print("File: functions_python/digitization_pipeline.py")
+print("Status: Loading ECGDigitizer class...")
+print("=" * 70)
 
 
 class ECGDigitizer:
@@ -64,6 +125,8 @@ class ECGDigitizer:
         # Step 3: Detect and extract leads
         lead_regions = self.detect_leads(preprocessed, grid_info)
         
+        # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
+        
         # Step 4: Extract signals from each lead
         signals = {}
         for lead_name, region in lead_regions.items():
@@ -101,27 +164,19 @@ class ECGDigitizer:
     
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
-        OPTIMIZED: Preprocess image with faster denoising and rotation correction
-        Changes: Adaptive denoising based on image quality, faster rotation correction
+        Preprocess image: denoise, enhance contrast, correct rotation
         """
-        # OPTIMIZATION: Adaptive denoising based on image quality
-        image_std = np.std(image)
+        # 1. Denoise
+        denoised = cv2.fastNlMeansDenoising(image, None, 10, 7, 21)
         
-        if image_std > 40:  # High quality image, use lighter denoising
-            # Use faster bilateral filter instead of slow NLM
-            denoised = cv2.bilateralFilter(image, 5, 50, 50)
-        elif image_std > 20:  # Medium quality, use reduced NLM parameters
-            # Reduced parameters: (10, 7, 21) -> (5, 7, 15) = 2-3x faster
-            denoised = cv2.fastNlMeansDenoising(image, None, 5, 7, 15)
-        else:  # Low quality, use full denoising
-            denoised = cv2.fastNlMeansDenoising(image, None, 10, 7, 21)
-        
-        # 2. Enhance contrast using CLAHE (keep this, it's fast)
+        # 2. Enhance contrast using CLAHE
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(denoised)
         
-        # 3. OPTIMIZED: Faster rotation correction
+        # 3. Detect and correct rotation
         rotated = self.correct_rotation(enhanced)
+        
+        # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
         
         # 4. Binarize (threshold)
         _, binary = cv2.threshold(rotated, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -129,27 +184,16 @@ class ECGDigitizer:
         return binary
     
     def correct_rotation(self, image: np.ndarray) -> np.ndarray:
-        """
-        OPTIMIZED: Faster rotation correction
-        - Downsample before Hough Transform (2x faster)
-        - Only rotate if angle is significant (> 0.5 degrees)
-        """
-        # OPTIMIZATION: Downsample for faster processing
-        scale = 0.5  # Process at half resolution
-        h, w = image.shape
-        small = cv2.resize(image, (int(w * scale), int(h * scale)))
+        """Detect and correct image rotation using Hough line detection"""
+        edges = cv2.Canny(image, 50, 150, apertureSize=3)
+        lines = cv2.HoughLines(edges, 1, np.pi / 180, 200)
         
-        edges = cv2.Canny(small, 50, 150, apertureSize=3)
-        lines = cv2.HoughLines(edges, 1, np.pi / 180, 100)  # Higher threshold = fewer lines
-        
-        if lines is None or len(lines) == 0:
+        if lines is None:
             return image
         
-        # OPTIMIZATION: Only process top 20 lines (instead of all)
-        lines_to_process = min(20, len(lines))
+        # Calculate dominant angle
         angles = []
-        
-        for line in lines[:lines_to_process]:
+        for line in lines[:20]:  # Use top 20 lines
             rho, theta = line[0]
             angle = np.degrees(theta) - 90
             if abs(angle) < 45:  # Only consider small rotations
@@ -161,11 +205,9 @@ class ECGDigitizer:
         # Use median angle to avoid outliers
         rotation_angle = np.median(angles)
         
-        # OPTIMIZATION: Only rotate if angle is significant (> 0.5 degrees)
-        if abs(rotation_angle) < 0.5:
-            return image
+        # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
         
-        # Rotate full-resolution image
+        # Rotate image
         (h, w) = image.shape[:2]
         center = (w // 2, h // 2)
         M = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
@@ -214,6 +256,8 @@ class ECGDigitizer:
             grid_info = self.grid_detector.detect_grid(image)
         
         return grid_info
+    
+    # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
     
     def calibrate_scales(self, grid_info: Dict) -> Dict:
         """
@@ -308,6 +352,8 @@ class ECGDigitizer:
             'grid_spacing_v': v_spacing
         }
     
+    # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
+    
     def detect_leads(self, image: np.ndarray, grid_info: Dict) -> Dict[str, np.ndarray]:
         """
         Detect the 12 lead regions in the ECG image
@@ -345,6 +391,8 @@ class ECGDigitizer:
         
         return lead_regions
     
+    # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
+    
     def extract_signal(self, region: np.ndarray, calibration: Dict) -> np.ndarray:
         """
         Extract time-series signal from a lead region
@@ -368,19 +416,7 @@ class ECGDigitizer:
                     if np.mean(column) > 128:
                         column = 255 - column
                     
-                    # FEATURE 2.1: Adaptive threshold per column
-                    col_max = np.max(column)
-                    col_mean = np.mean(column)
-                    col_std = np.std(column)
-                    
-                    if col_std > 10:
-                        threshold = np.percentile(column, 75)
-                    else:
-                        threshold = col_mean + col_std
-                    
-                    threshold = max(threshold, col_max * 0.3)
-                    threshold = min(threshold, col_max * 0.8)
-                    
+                    threshold = np.max(column) * 0.5
                     dark_pixels = column > threshold
                     
                     if np.any(dark_pixels):
@@ -388,13 +424,7 @@ class ECGDigitizer:
                         weights = column[dark_pixels]
                         center = np.average(positions, weights=weights)
                     else:
-                        # FEATURE 2.1: Better fallback
-                        if len(seg_signal) > 0:
-                            prev_voltage = seg_signal[-1]
-                            center = seg_h / 2 - (prev_voltage * calibration['pixels_per_mv'])
-                            center = np.clip(center, 0, seg_h - 1)
-                        else:
-                            center = seg_h / 2
+                        center = seg_h / 2
                     
                     voltage_pixels = seg_h / 2 - center
                     voltage_mv = voltage_pixels / calibration['pixels_per_mv']
@@ -414,36 +444,7 @@ class ECGDigitizer:
         else:
             signal_array = self._extract_signal_standard(region, calibration)
         
-        # FEATURE 2.2: Apply median filter to remove outliers
-        if len(signal_array) > 3:
-            signal_array = median_filter(signal_array, size=3)
-        
-        # FEATURE 2.2: Apply Gaussian smoothing (light)
-        if len(signal_array) > 5:
-            signal_array = gaussian_filter1d(signal_array, sigma=0.5)
-        
-        # FEATURE 2.3: Validate signal continuity
-        if len(signal_array) > 1:
-            # Check for sudden jumps (likely errors)
-            diffs = np.abs(np.diff(signal_array))
-            median_diff = np.median(diffs)
-            mad = np.median(np.abs(diffs - median_diff))  # Median Absolute Deviation
-            
-            # Flag outliers (jumps > 3 * MAD)
-            if mad > 0:
-                outlier_threshold = median_diff + 3 * mad
-                outliers = np.where(diffs > outlier_threshold)[0]
-                
-                if len(outliers) > len(signal_array) * 0.1:  # More than 10% outliers
-                    # Apply more aggressive smoothing
-                    signal_array = gaussian_filter1d(signal_array, sigma=1.0)
-                
-                # Interpolate over detected outliers
-                if len(outliers) > 0 and len(outliers) < len(signal_array) * 0.2:
-                    for idx in outliers:
-                        if idx > 0 and idx < len(signal_array) - 1:
-                            # Interpolate from neighbors
-                            signal_array[idx] = (signal_array[idx-1] + signal_array[idx+1]) / 2
+        # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
         
         # Resample to standard sampling rate (500 Hz)
         duration_sec = width / calibration['pixels_per_sec']
@@ -539,6 +540,8 @@ class ECGDigitizer:
                 b, a = signal.iirnotch(freq, 30, self.sampling_rate)
                 sig_filtered = signal.filtfilt(b, a, sig_filtered)
             
+            # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
+            
             processed.append({
                 'name': lead_name,
                 'values': sig_filtered.tolist(),
@@ -547,6 +550,8 @@ class ECGDigitizer:
             })
         
         return processed
+    
+    # STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
     
     def calculate_quality_metrics(self, processed_signals: List[Dict]) -> Dict:
         """Calculate signal quality metrics"""
@@ -602,15 +607,20 @@ def process_ecg_for_firebase(image_bytes: bytes) -> Dict:
     finally:
         os.unlink(tmp_path)
 
+# STEP 4: KAGGLE_CELL_4_READY_TO_PASTE.py
 
-if __name__ == "__main__":
-    # Test the pipeline
-    digitizer = ECGDigitizer()
-    result = digitizer.process_image("sample_ecg.png")
-    
-    print(f"Processed {len(result['leads'])} leads")
-    print(f"Quality metrics: {result['metadata']['quality']}")
-    
-    # Save results
-    with open('output.json', 'w') as f:
-        json.dump(result, f, indent=2)
+print("\n" + "=" * 70)
+print("STEP 4: digitization_pipeline.py loaded successfully!")
+print("File: functions_python/digitization_pipeline.py")
+print("Status: ✓ SUCCESS")
+print("Class: ECGDigitizer is now available")
+print("=" * 70)
+
+# ============================================================================
+# FILE IDENTIFICATION
+# ============================================================================
+# This file: kaggle_cell_4_ready_to_paste.py
+# Source: KAGGLE_CELL_4_READY_TO_PASTE.py
+# Purpose: Complete Cell 4 code for Kaggle notebook with fixed imports
+# Usage: Copy entire file into Cell 4 of Kaggle notebook
+# ============================================================================

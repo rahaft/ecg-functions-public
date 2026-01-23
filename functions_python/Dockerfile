@@ -25,5 +25,5 @@ EXPOSE 8080
 ENV FLASK_APP=main.py
 ENV FLASK_ENV=production
 
-# Run Flask app
-CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=8080"]
+# Run Flask app directly (better for CORS handling)
+CMD ["python", "main.py"]
