@@ -1809,23 +1809,44 @@
         let currentViewMode = 'side-by-side';
         window.switchViewMode = function(mode) {
             currentViewMode = mode;
+            console.log('Switching view mode to:', mode);
             
             // Hide all views
             document.querySelectorAll('.view-container').forEach(view => {
                 view.style.display = 'none';
             });
             
-            // Show selected view
-            const selectedView = document.getElementById(`view-${mode}`);
+            // Show selected view - handle both formats (with and without hyphens)
+            const viewId = `view-${mode.replace('_', '-')}`;
+            const selectedView = document.getElementById(viewId);
             if (selectedView) {
                 selectedView.style.display = 'block';
+                console.log('Showing view:', viewId);
+            } else {
+                console.error('View element not found:', viewId);
             }
             
             // If switching to step-by-step view, render the checklist
             if (mode === 'step-by-step') {
                 const current = currentComparisonImages[currentComparisonIndex];
+                console.log('Step-by-step view: current image =', current);
                 if (current) {
-                    renderProcessingChecklist(current);
+                    // Use setTimeout to ensure DOM is ready
+                    setTimeout(() => {
+                        console.log('Rendering processing checklist for:', current.name || current.original_name);
+                        renderProcessingChecklist(current);
+                    }, 50);
+                } else {
+                    console.warn('No current image available for step-by-step view');
+                    const checklist = document.getElementById('processing-checklist');
+                    if (checklist) {
+                        checklist.innerHTML = `
+                            <div style="padding: 1rem; background: #f8d7da; border: 1px solid #dc3545; border-radius: 0.5rem; color: #721c24;">
+                                <strong>⚠️ No image selected.</strong><br>
+                                <span style="font-size: 0.875rem;">Please select an image from the comparison view first.</span>
+                            </div>
+                        `;
+                    }
                 }
             }
             
@@ -1972,10 +1993,25 @@
         // Render interactive processing checklist
         function renderProcessingChecklist(current) {
             const checklist = document.getElementById('processing-checklist');
-            if (!checklist) return;
+            if (!checklist) {
+                console.error('Processing checklist element not found! Make sure view-step-by-step is visible.');
+                return;
+            }
+            
+            console.log('Rendering checklist for image:', current?.name || current?.original_name);
+            
+            // Check if we have processing data - look in multiple places
+            const hasProcessingData = current && (
+                current.steps || 
+                current._raw?.steps || 
+                current.metrics || 
+                current._raw?.metrics ||
+                current.processed_url ||
+                current.processed_image_base64
+            );
             
             // If no current image or no processing done, show all steps as pending
-            if (!current || (!current.steps && !current.processed_url)) {
+            if (!current || !hasProcessingData) {
                 checklist.innerHTML = `
                     <div style="padding: 1rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; color: #856404; margin-bottom: 1rem;">
                         <strong>ℹ️ No processing data available.</strong><br>
@@ -2045,7 +2081,10 @@
         
         // Get step data from current processing result
         function getStepData(current, stepId) {
-            if (!current || !current.steps) return null;
+            if (!current) return null;
+            
+            // Try multiple locations for step data
+            const steps = current.steps || current._raw?.steps || {};
             
             // Map step_id to step data keys
             const stepMap = {
@@ -2068,7 +2107,28 @@
             };
             
             const stepKey = stepMap[stepId];
-            return current.steps[stepKey] || null;
+            if (!stepKey) return null;
+            
+            // Return step data from steps object
+            const stepData = steps[stepKey];
+            
+            // If step data exists, return it
+            if (stepData) return stepData;
+            
+            // For quality gates (step 1), check if metrics exist
+            if (stepId === 1) {
+                const metrics = current.metrics || current._raw?.metrics;
+                if (metrics) {
+                    return {
+                        blur_score: metrics.blur_score,
+                        dpi: metrics.dpi,
+                        contrast_std: metrics.contrast_std,
+                        grid_lines_count: metrics.grid_lines_count
+                    };
+                }
+            }
+            
+            return null;
         }
         
         // Format step details for display
@@ -2332,83 +2392,225 @@
             }
             
             try {
-                // Get original image
-                const originalUrl = current.original_url || (current.path ? `https://storage.googleapis.com/${current.bucket || GCS_BUCKETS[0]}/${current.path}` : '');
+                // Strategy: Try multiple sources for image data
+                let base64data = null;
+                let imageSource = '';
                 
-                // Fetch image and convert to base64
-                const response = await fetch(originalUrl);
-                const blob = await response.blob();
-                const reader = new FileReader();
-                
-                reader.onloadend = async function() {
-                    const base64data = reader.result.split(',')[1];
+                // 1. First priority: Use existing base64 from processed_image_base64
+                if (current.processed_image_base64) {
+                    base64data = current.processed_image_base64;
+                    imageSource = 'processed_image_base64';
+                    console.log('Using processed_image_base64');
+                }
+                // 2. Second priority: Check previous step results for input image
+                else if (stepId > 0 && stepResults[stepId - 1] && stepResults[stepId - 1].output_image) {
+                    base64data = stepResults[stepId - 1].output_image;
+                    imageSource = 'previous_step_output';
+                    console.log('Using previous step output image');
+                }
+                // 3. Third priority: Check if current image has base64 in steps
+                else if (current.steps) {
+                    // Look for any step that has input_image_base64
+                    for (const stepKey in current.steps) {
+                        const stepData = current.steps[stepKey];
+                        if (stepData && stepData.input_image_base64) {
+                            base64data = stepData.input_image_base64;
+                            imageSource = `step_${stepKey}_input`;
+                            console.log(`Using input image from step: ${stepKey}`);
+                            break;
+                        }
+                    }
+                }
+                // 4. Last resort: Try to fetch from URL (may fail due to CORS)
+                if (!base64data) {
+                    const originalUrl = current.original_url || 
+                                      (current.path ? `https://storage.googleapis.com/${current.bucket || GCS_BUCKETS[0]}/${current.path}` : '') ||
+                                      current.url;
                     
-                    // Call execute-step endpoint
-                    const executeResponse = await fetch(`${PYTHON_SERVICE_URL}/execute-step`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            step_id: stepId,
-                            method_id: step.method_id,
-                            image: base64data,
-                            previous_result: stepResults[stepId - 1] || {}
-                        })
-                    });
-                    
-                    if (!executeResponse.ok) {
-                        throw new Error(`HTTP error! status: ${executeResponse.status}`);
+                    if (!originalUrl) {
+                        throw new Error('No image URL or base64 data available. Please process the image first.');
                     }
                     
-                    const result = await executeResponse.json();
+                    console.log('Attempting to fetch image from URL:', originalUrl);
                     
-                    if (result.success) {
-                        // Store result
-                        stepResults[stepId] = result;
+                    // Try fetching with timeout
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+                    
+                    try {
+                        const response = await fetch(originalUrl, {
+                            mode: 'cors',
+                            credentials: 'omit',
+                            signal: controller.signal
+                        });
                         
-                        // Update step data in current image
-                        if (!current.steps) current.steps = {};
-                        const stepKey = getStepKey(stepId);
+                        clearTimeout(timeoutId);
                         
-                        // Special handling for color separation - store trace and grid images
-                        if (stepId === 2 && result.grid_mask) {
-                            // Color separation returns trace_image and grid_mask
-                            // Convert grid_mask to image if needed
-                            current.steps[stepKey] = {
-                                ...result.metrics,
-                                output_image_base64: result.output_image, // This is trace_image
-                                trace_image_base64: result.output_image,
-                                grid_mask_base64: result.grid_mask, // May need conversion
-                                input_image_base64: result.input_image
-                            };
-                        } else {
-                            current.steps[stepKey] = {
-                                ...result.metrics,
-                                output_image_base64: result.output_image,
-                                input_image_base64: result.input_image
-                            };
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                         }
                         
-                        // Refresh checklist
-                        renderProcessingChecklist(current);
-                        
-                        // If step detail viewer is open, refresh it
-                        if (currentSelectedStep && currentSelectedStep.stepId === stepId) {
-                            viewStepDetails(stepId, stepIndex);
+                        const blob = await response.blob();
+                        if (!blob || blob.size === 0) {
+                            throw new Error('Received empty image blob');
                         }
                         
-                        alert(`Step "${step.name}" executed successfully!`);
-                    } else {
-                        throw new Error(result.error || 'Step execution failed');
+                        base64data = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const result = reader.result;
+                                if (result && typeof result === 'string') {
+                                    // Remove data:image/...;base64, prefix
+                                    const base64 = result.includes(',') ? result.split(',')[1] : result;
+                                    resolve(base64);
+                                } else {
+                                    reject(new Error('Failed to convert image to base64'));
+                                }
+                            };
+                            reader.onerror = () => reject(new Error('FileReader error'));
+                            reader.readAsDataURL(blob);
+                        });
+                        
+                        imageSource = 'url_fetch';
+                        console.log('Successfully fetched image from URL');
+                    } catch (fetchError) {
+                        clearTimeout(timeoutId);
+                        console.error('Error fetching image from URL:', fetchError);
+                        
+                        // Alternative: Use backend to fetch the image
+                        if (current.path && current.bucket) {
+                            console.log('Trying backend proxy for image fetch...');
+                            try {
+                                const proxyResponse = await fetch(`${PYTHON_SERVICE_URL}/get-gcs-image`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        bucket: current.bucket,
+                                        path: current.path
+                                    })
+                                });
+                                
+                                if (proxyResponse.ok) {
+                                    const proxyResult = await proxyResponse.json();
+                                    if (proxyResult.image_base64) {
+                                        base64data = proxyResult.image_base64;
+                                        imageSource = 'backend_proxy';
+                                        console.log('Successfully fetched image via backend proxy');
+                                    }
+                                }
+                            } catch (proxyError) {
+                                console.error('Backend proxy also failed:', proxyError);
+                            }
+                        }
+                        
+                        if (!base64data) {
+                            throw new Error(`Cannot fetch image: ${fetchError.message}. The image may not be accessible due to CORS restrictions.`);
+                        }
                     }
+                }
+                
+                if (!base64data) {
+                    throw new Error('No image data available from any source');
+                }
+                
+                console.log(`Using image from source: ${imageSource}, data length: ${base64data.length}`);
+                
+                // Prepare request body - use base64 if available, otherwise use GCS path
+                const requestBody = {
+                    step_id: stepId,
+                    method_id: step.method_id,
+                    previous_result: stepResults[stepId - 1] || {}
                 };
                 
-                reader.readAsDataURL(blob);
+                // If we have base64 data, use it; otherwise pass GCS path for backend to fetch
+                if (base64data) {
+                    requestBody.image = base64data;
+                } else if (current.path && current.bucket) {
+                    // Let backend fetch from GCS
+                    requestBody.gcs_path = current.path;
+                    requestBody.bucket = current.bucket;
+                    console.log('Using GCS path for backend to fetch:', current.path);
+                } else {
+                    throw new Error('No image data or GCS path available');
+                }
+                
+                // Call execute-step endpoint
+                console.log('Calling execute-step endpoint with step_id:', stepId);
+                const executeResponse = await fetch(`${PYTHON_SERVICE_URL}/execute-step`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!executeResponse.ok) {
+                    let errorText = 'Unknown error';
+                    try {
+                        errorText = await executeResponse.text();
+                    } catch (e) {
+                        errorText = `HTTP ${executeResponse.status} ${executeResponse.statusText}`;
+                    }
+                    throw new Error(`Backend error (${executeResponse.status}): ${errorText}`);
+                }
+                
+                let result;
+                try {
+                    result = await executeResponse.json();
+                } catch (e) {
+                    throw new Error(`Failed to parse response: ${e.message}`);
+                }
+                
+                if (result.success) {
+                    // Store result
+                    stepResults[stepId] = result;
+                    
+                    // Update step data in current image
+                    if (!current.steps) current.steps = {};
+                    const stepKey = getStepKey(stepId);
+                    
+                    // Special handling for color separation - store trace and grid images
+                    if (stepId === 2 && result.grid_mask) {
+                        // Color separation returns trace_image and grid_mask
+                        // Convert grid_mask to image if needed
+                        current.steps[stepKey] = {
+                            ...result.metrics,
+                            output_image_base64: result.output_image, // This is trace_image
+                            trace_image_base64: result.output_image,
+                            grid_mask_base64: result.grid_mask, // May need conversion
+                            input_image_base64: result.input_image
+                        };
+                    } else {
+                        current.steps[stepKey] = {
+                            ...result.metrics,
+                            output_image_base64: result.output_image,
+                            input_image_base64: result.input_image
+                        };
+                    }
+                    
+                    // Refresh checklist
+                    renderProcessingChecklist(current);
+                    
+                    // If step detail viewer is open, refresh it
+                    if (currentSelectedStep && currentSelectedStep.stepId === stepId) {
+                        viewStepDetails(stepId, stepIndex);
+                    }
+                    
+                    alert(`Step "${step.name}" executed successfully!`);
+                } else {
+                    throw new Error(result.error || 'Step execution failed');
+                }
                 
             } catch (error) {
                 console.error('Error re-executing step:', error);
-                alert(`Error executing step: ${error.message}`);
+                const errorMsg = error.message || 'Unknown error occurred';
+                
+                // Show user-friendly error message
+                alert(`Error executing step "${step.name}":\n\n${errorMsg}\n\n` +
+                      `Troubleshooting:\n` +
+                      `- If CORS error: The backend should fetch images from GCS\n` +
+                      `- If network error: Check backend service is running\n` +
+                      `- If image not found: Process the image first to generate base64 data`);
             } finally {
                 if (stepItem) {
                     stepItem.style.opacity = '1';
